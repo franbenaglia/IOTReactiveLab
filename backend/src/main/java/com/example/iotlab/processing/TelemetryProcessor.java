@@ -101,16 +101,27 @@ public class TelemetryProcessor {
                 // Reentregarlo no lo arregla: se confirma de inmediato.
                 return Mono.just(new Outcome(Outcome.Type.INVALID, src.ackToken(), src.receivedNanos(), r.reason()));
             case STATUS:
-                // Fase 3: se persiste en `devices`. Por ahora solo se cuenta.
-                return Mono.just(new Outcome(Outcome.Type.STATUS, src.ackToken(), src.receivedNanos(), null));
+                return withRetry(r, Mono.defer(() -> store.saveStatus(r.status()))
+                        .thenReturn(new Outcome(Outcome.Type.STATUS, src.ackToken(), src.receivedNanos(), null)));
             default:
-                return persist(r);
+                return withRetry(r, Mono.defer(() -> store.save(r.telemetry()))
+                        .map(result -> new Outcome(result == StoreResult.INSERTED ? Outcome.Type.PERSISTED : Outcome.Type.DUPLICATE,
+                                src.ackToken(), src.receivedNanos(), null)));
         }
     }
 
-    private Mono<Outcome> persist(ParseResult r) {
+    /**
+     * Política de escritura común a telemetría y status (ADR-010): plazo por intento, reintentos
+     * con backoff ante errores transitorios, y un Outcome FAILED ante los no transitorios.
+     */
+    private Mono<Outcome> withRetry(ParseResult r, Mono<Outcome> write) {
         InboundMessage src = r.source();
-        return Mono.defer(() -> store.save(r.telemetry()))
+        String what = r.kind() == ParseResult.Kind.STATUS ? "status de " + r.status().deviceId() : r.telemetry().deviceId();
+        return write
+                // timeout: cada intento tiene un plazo. Va ANTES de retryWhen para que el plazo
+                // sea por intento y no total: al vencer, emite TimeoutException (transitorio) y
+                // cancela la escritura colgada.
+                .timeout(props.storeTimeout())
                 // retryWhen: ante un error transitorio, vuelve a suscribirse a store.save() con
                 // espera exponencial (100 ms, 200 ms, ... hasta retryMaxBackoff) y sin límite de
                 // intentos. Mientras tanto el mensaje no se confirma: con la base caída se llenan
@@ -122,16 +133,14 @@ public class TelemetryProcessor {
                             metrics.storeRetry();
                             if (s.totalRetries() % 10 == 0) {
                                 log.warn("Reintentando persistencia de {} (intento {}): {}",
-                                        r.telemetry().deviceId(), s.totalRetries() + 1, s.failure().toString());
+                                        what, s.totalRetries() + 1, s.failure().toString());
                             }
                         }))
-                .map(result -> new Outcome(result == StoreResult.INSERTED ? Outcome.Type.PERSISTED : Outcome.Type.DUPLICATE,
-                        src.ackToken(), src.receivedNanos(), null))
                 // onErrorResume: solo llegan aquí los errores NO transitorios (el filtro de
                 // retryWhen los deja pasar). Se convierten en un Outcome: el Flux principal
                 // nunca recibe onError por una medición.
                 .onErrorResume(e -> {
-                    log.error("Error no transitorio guardando {}: se descarta", r.telemetry(), e);
+                    log.error("Error no transitorio guardando {}: se descarta", what, e);
                     return Mono.just(new Outcome(Outcome.Type.FAILED, src.ackToken(), src.receivedNanos(), null));
                 })
                 // Gauge de escrituras en curso. doOnTerminate/doOnCancel y NO doFinally:

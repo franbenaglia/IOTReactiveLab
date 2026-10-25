@@ -5,6 +5,30 @@ spring:
     # Contraseñas desde el .env de la raíz del repo (formato KEY=VALUE, compatible con
     # .properties). Opcional: en Docker llegan como variables de entorno.
     import: optional:file:../.env[.properties]
+  r2dbc:
+    # 127.0.0.1 y no "localhost": con "localhost", el resolver asíncrono de Netty (que usa
+    # r2dbc-postgresql) hacía que abrir 20 conexiones a la vez superara los 3 s; con la IP, el
+    # pool se precalienta al instante. Ver docs/progress.md, fase 3.
+    url: r2dbc:postgresql://${POSTGRES_HOST:127.0.0.1}:${POSTGRES_PORT:5432}/${POSTGRES_DB:iotlab}
+    username: ${POSTGRES_USER:iotlab}
+    password: ${POSTGRES_PASSWORD:}
+    pool:
+      # El pool debe ser >= iotlab.pipeline.concurrency (20) + margen para la API REST y el
+      # flush de last_seen: si flatMap pide más conexiones que las que hay, las escrituras
+      # esperan en la cola del pool (y pueden vencer max-acquire-time).
+      # initial-size = iotlab.pipeline.concurrency: R2dbcPoolWarmup las crea antes de MQTT.
+      initial-size: 20
+      max-size: 25
+      max-acquire-time: 3s
+      max-create-connection-time: 3s
+      max-idle-time: 10m
+      validation-query: SELECT 1
+  flyway:
+    # Migraciones por JDBC, una vez al arrancar, en el hilo principal (no en un event loop).
+    # La aplicación usa R2DBC; JDBC solo vive durante la migración.
+    url: jdbc:postgresql://${POSTGRES_HOST:127.0.0.1}:${POSTGRES_PORT:5432}/${POSTGRES_DB:iotlab}
+    user: ${POSTGRES_USER:iotlab}
+    password: ${POSTGRES_PASSWORD:}
 
 server:
   port: ${BACKEND_PORT:8080}
@@ -21,6 +45,9 @@ iotlab:
     concurrency: 20
     temperature-min: -40
     temperature-max: 125
+    store-timeout: 5s
+  devices:
+    last-seen-flush: 5s
 
 management:
   endpoints:

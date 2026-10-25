@@ -114,3 +114,40 @@ Total: 40 pruebas (38 unitarias + 2 de integración), todas pasan.
 2. Con el backend caído, el simulador publicó 1.998 telemetrías + 200 status (otros IDs, `--id-offset 100`).
 3. Al levantar el backend: **1.998 telemetrías recibidas** (lo que el broker guardó para la sesión), 0 PUBACK pendientes.
 4. Dos reinicios más con `retainHandling=1`: 0 status retained reenviados (antes: 5.000).
+
+## Fase 3 — persistencia reactiva (2026-10-25)
+
+```bash
+cd backend && mvn verify      # 44 unitarias + 14 de integración (PostgreSQL y Mosquitto en Testcontainers)
+```
+
+| Prueba | Qué verifica | Resultado |
+|---|---|---|
+| `R2dbcTelemetryStoreIT` (5) | INSERTED → DUPLICATE en la reentrega → INSERTED tras un reinicio (misma `sequence`, otra hora); status ignora estados viejos; `last_seen` por lotes; recuperación de una violación de FK; humedad nula y con valor | ✅ |
+| `DeviceApiIT` (6) | Listado con última medición; 404 y 400; historial paginado (60 + 40 en [100 s, 200 s), descendente, `hasMore`); parámetros inválidos; overview | ✅ |
+| `BackendMqttIT` | MQTT → PostgreSQL: 300 válidos + 20 reenvíos idénticos + 1 inválido → 300 filas, 20 duplicados, 321 PUBACK | ✅ |
+| `PostgresOutageIT` | `docker pause` de PostgreSQL durante la carga: reintentos, PUBACK retenidos ≤ `receiveMaximum`; al reanudar, 201/201 filas y 0 fallidos | ✅ |
+| `R2dbcTelemetryStoreTest` (4) | Clasificación por SQLSTATE | ✅ |
+| `TelemetryProcessorTest` (+2) | Escritura colgada: plazo por intento y reintento (tiempo virtual); status con la misma política de reintentos | ✅ |
+
+Total: 58 pruebas, todas pasan (dos corridas seguidas).
+
+### Criterios de aceptación de la fase 3
+
+| Criterio | Evidencia | |
+|---|---|---|
+| Mediciones persistidas y consultables | 100 disp × 90 s contra la base de compose: 8.997 publicadas = 8.997 filas. API: listado, `latest`, `history` paginado, overview | ✅ |
+| Duplicados rechazados por la base y contados | `BackendMqttIT`: 20 reenvíos → 20 `duplicate`, 300 filas; `R2dbcTelemetryStoreIT` | ✅ |
+| Caída breve de PostgreSQL no mata el pipeline | Manual: `docker compose stop postgres` 20 s con 100 disp a 100 msg/s. Durante la caída: 100 sin confirmar (= `receiveMaximum`) = 20 reintentándose (= concurrencia) + 80 en la cola del Sink; el broker retuvo el resto. Al volver: vaciado en ~20 s, **8.997/8.997 filas, 0 duplicadas, 0 fallidas**. Automática: `PostgresOutageIT` (base congelada) | ✅ |
+| Pruebas con Testcontainers pasan | 58/58 | ✅ |
+
+### Hallazgo: `localhost` vs `127.0.0.1` en R2DBC
+
+Al arrancar con trabajo acumulado en la sesión (2.996 mensajes), el atraso se
+procesaba a goteo durante ~10 s, con esperas de conexión que superaban 3 s.
+Precalentar el pool tampoco alcanzaba: crear 20 conexiones a la vez vencía el
+plazo. **Con `127.0.0.1` en lugar de `localhost`** el pool se precalienta al
+instante y el mismo atraso se procesa en **2,05 s, sin reintentos**.
+Reproducido dos veces. Causa probable: la resolución asíncrona de nombres de
+Netty, que usa r2dbc-postgresql, para `localhost`; el sistema operativo lo
+resuelve directo a 127.0.0.1. No se investigó más a fondo.

@@ -10,6 +10,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param concurrency escrituras en curso a la vez en {@code flatMap}. En la fase 3 no debe
  *                    superar el tamaño del pool R2DBC: el excedente esperaría una conexión libre.
  * @param maxFutureSkew tolerancia para timestamps "del futuro" (relojes desfasados).
+ * @param storeTimeout plazo por intento de escritura. Una base colgada (no caída) no devuelve
+ *                     error: sin plazo, la escritura ocuparía su ranura de flatMap para siempre.
  */
 @ConfigurationProperties("iotlab.pipeline")
 public record PipelineProperties(
@@ -19,7 +21,8 @@ public record PipelineProperties(
         @DefaultValue("5m") Duration maxFutureSkew,
         @DefaultValue("100ms") Duration retryMinBackoff,
         @DefaultValue("10s") Duration retryMaxBackoff,
-        @DefaultValue("10s") Duration shutdownTimeout) {
+        @DefaultValue("10s") Duration shutdownTimeout,
+        @DefaultValue("5s") Duration storeTimeout) {
 
     public PipelineProperties {
         if (concurrency < 1) {

@@ -1,5 +1,6 @@
 package com.example.iotlab.metrics;
 
+import com.example.iotlab.api.MetricsOverview;
 import com.example.iotlab.processing.InvalidReason;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
@@ -119,4 +120,21 @@ public class PipelineMetrics {
     }
 
     public boolean isConnected() { return connected.get() == 1; }
+
+    public MetricsOverview overview(long devicesTotal, long devicesOnline, long devicesOffline, long telemetryRows) {
+        double invalidTotal = invalid.values().stream().mapToDouble(Counter::count).sum();
+        var snapshot = latency.takeSnapshot();
+        double p95 = 0, p99 = 0;
+        for (var v : snapshot.percentileValues()) {
+            if (v.percentile() == 0.95) p95 = v.value(java.util.concurrent.TimeUnit.MILLISECONDS);
+            if (v.percentile() == 0.99) p99 = v.value(java.util.concurrent.TimeUnit.MILLISECONDS);
+        }
+        var pending = registry.find(PREFIX + "mqtt.acks.pending").gauge();
+        return new MetricsOverview(isConnected(),
+                receivedTelemetry.count() + receivedStatus.count() + receivedUnknown.count(),
+                valid.count(), invalidTotal, inserted.count(), duplicates.count(), storeFailed.count(),
+                storeRetries.count(), sequenceResets.count(), acksSent.count(),
+                pending == null ? 0 : pending.value(), storeInFlight.get(), p95, p99,
+                devicesTotal, devicesOnline, devicesOffline, telemetryRows);
+    }
 }

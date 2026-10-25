@@ -5,9 +5,9 @@ abrir cada sesión: mantenerla corta y al día.
 
 ## Estado actual
 
-- **Fase:** 2 — Backend MQTT + Reactor → **completada y validada** (2026-10-25). Próxima: **Fase 3** (persistencia reactiva).
-- **Última tarea:** backend con Paho v5 + Pipeline A (validación, `flatMap`, PUBACK en orden) contra 100 dispositivos simulados; sesión persistente verificada con el backend caído. 40 pruebas pasan.
-- **Próximo paso:** fase 3. Agregar R2DBC + Flyway, crear las tablas `devices`/`telemetry` con la clave única de ADR-011 y reemplazar `NoOpTelemetryStore` por el almacén R2DBC (`INSERT … ON CONFLICT DO NOTHING`, `isTransient` según las excepciones de R2DBC). Pool R2DBC ≥ `iotlab.pipeline.concurrency`.
+- **Fase:** 3 — Persistencia reactiva → **completada y validada** (2026-10-25). Próxima: **Fase 4** (WebSocket + dashboard React).
+- **Última tarea:** R2DBC + Flyway, almacén con deduplicación, registro de dispositivos, API REST. Caída de PostgreSQL de 20 s con 100 disp: 8.997/8.997 filas, sin pérdidas. 58 pruebas pasan.
+- **Próximo paso:** fase 4. WebSocket `/ws/telemetry` sobre `RealtimeTelemetryBus` (contrato JSON de suscripción, `sample()`, filtros por dispositivo, clientes lentos), Pipeline C (alertas con antirrebote) y el frontend React (Vite + TS + Recharts). Antes, definir el contrato WebSocket en `architecture.md`.
 - **En curso / a medias:** nada.
 
 ## Pendientes / bloqueos
@@ -15,7 +15,6 @@ abrir cada sesión: mantenerla corta y al día.
 | # | Pendiente | Bloquea | Notas |
 |---|---|---|---|
 | P6 | Mosquitto CLI no instalado en el host | — | Usar `docker compose exec mosquitto mosquitto_sub ...` (ver README) |
-| P8 | El broker conserva status retained `offline` de los 5.000 `esp32-sim-*` de las pruebas de carga | Fase 3 | Con `retainHandling=1` ya no se reenvían en cada reconexión. Decidir en la fase 3 si se registran en `devices` o se limpian con `simulator/tools/clear_retained.py --prefix esp32-sim-` |
 | P9 | Perfil Docker Compose opcional para el simulador | — | main.md §14 lo deja opcional; hoy corre desde el host |
 
 ## Entorno
@@ -39,6 +38,18 @@ Spring Boot 4.1.2 (última estable), Paho Java 1.2.5, r2dbc-postgresql
 Revalidar compatibilidad al comenzar cada fase (ADR-004).
 
 ## Registro
+
+### 2026-10-25 — Fase 3: persistencia reactiva
+- Spring Data R2DBC (`DatabaseClient`) + r2dbc-postgresql 1.1.3 + pool; Flyway 12.4 por JDBC al arrancar. ADR-013.
+- Esquema V1 con la clave única de ADR-011 como índice de consulta. FK `telemetry → devices`, con alta única en memoria y recuperación ante una violación de FK.
+- `status` persistido con reintentos; `last_seen` por lotes (`Flux.interval` + `concatMap`).
+- `timeout()` por intento (base colgada) antes de `retryWhen`.
+- API REST completa (main.md §10) con ProblemDetail para 400/404.
+- Hallazgos:
+  - Arranque con atraso + pool frío → esperas de conexión > 3 s y `onErrorDropped`. Se agregaron precalentamiento del pool y un hook que convierte los errores descartados en métrica.
+  - **`localhost` en R2DBC lento al abrir muchas conexiones; `127.0.0.1` lo resuelve** (vaciado de 10,6 s → 2,05 s). Detalle en `testing.md`.
+  - La sesión MQTT expiró entre fases (> 1 h): al volver, el broker reenvió los status retained y los 5.000 `esp32-sim-*` de la fase 1 quedaron registrados como dispositivos OFFLINE. Es lo esperado (P8 cerrado, ADR-013 punto 10).
+- Validación real: 100 disp × 90 s con PostgreSQL detenido 20 s → 8.997/8.997 filas.
 
 ### 2026-10-25 — Fase 2: backend MQTT + Reactor
 - Spring Boot 4.1.2 (Spring Framework 7, Reactor 2025.0, Jackson 3.1, JUnit 6, Testcontainers 2.0.5), Java 17. `backend/.mvn/settings.xml` → Maven Central (ADR-012); todas las dependencias se resolvieron sin la intranet.

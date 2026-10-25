@@ -20,7 +20,7 @@ import tools.jackson.databind.json.JsonMapper;
 class TelemetryParserTest {
 
     static final PipelineProperties PROPS = new PipelineProperties(20, -40, 125, Duration.ofMinutes(5),
-            Duration.ofMillis(100), Duration.ofSeconds(10), Duration.ofSeconds(10));
+            Duration.ofMillis(100), Duration.ofSeconds(10), Duration.ofSeconds(10), Duration.ofSeconds(5));
     static final Clock CLOCK = Clock.fixed(Instant.parse("2026-10-25T12:31:00Z"), ZoneOffset.UTC);
     final TelemetryParser parser = new TelemetryParser(JsonMapper.builder().build(), PROPS, CLOCK);
 

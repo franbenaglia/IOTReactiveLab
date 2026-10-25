@@ -5,6 +5,7 @@ import static com.example.iotlab.support.Messages.telemetry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.iotlab.config.PipelineProperties;
+import com.example.iotlab.domain.DeviceStatus;
 import com.example.iotlab.domain.Telemetry;
 import com.example.iotlab.metrics.PipelineMetrics;
 import com.example.iotlab.mqtt.AckTracker;
@@ -35,7 +36,7 @@ class TelemetryProcessorTest {
 
     static PipelineProperties props(int concurrency) {
         return new PipelineProperties(concurrency, -40, 125, Duration.ofMinutes(5),
-                Duration.ofMillis(100), Duration.ofSeconds(10), Duration.ofSeconds(10));
+                Duration.ofMillis(100), Duration.ofSeconds(10), Duration.ofSeconds(10), Duration.ofSeconds(5));
     }
 
     TelemetryProcessor processor(TelemetryStore store, int concurrency) {
@@ -46,7 +47,10 @@ class TelemetryProcessorTest {
     }
 
     static TelemetryStore store(Function<Telemetry, Mono<StoreResult>> fn) {
-        return fn::apply;
+        return new TelemetryStore() {
+            @Override public Mono<StoreResult> save(Telemetry t) { return fn.apply(t); }
+            @Override public Mono<Void> saveStatus(DeviceStatus s) { return Mono.empty(); }
+        };
     }
 
     double count(String name, String... tags) {
@@ -101,6 +105,7 @@ class TelemetryProcessorTest {
             @Override public Mono<StoreResult> save(Telemetry t) {
                 return t.sequence() == 2 ? Mono.error(new IllegalArgumentException("dato imposible")) : Mono.just(StoreResult.INSERTED);
             }
+            @Override public Mono<Void> saveStatus(DeviceStatus s) { return Mono.empty(); }
             @Override public boolean isTransient(Throwable e) { return !(e instanceof IllegalArgumentException); }
         };
         StepVerifier.create(processor(broken, 1).process(Flux.just(
@@ -112,6 +117,41 @@ class TelemetryProcessorTest {
         assertThat(acked).hasSize(3);
         assertThat(count("telemetry.stored", "result", "failed")).isEqualTo(1);
         assertThat(count("telemetry.store.retries")).isZero();
+    }
+
+    @Test
+    void hungWriteTimesOutAndIsRetried() {
+        AtomicInteger attempts = new AtomicInteger();
+        // Primer intento: nunca responde (base colgada). Segundo: OK.
+        TelemetryStore hung = store(t -> attempts.incrementAndGet() == 1 ? Mono.never() : Mono.just(StoreResult.INSERTED));
+        StepVerifier.withVirtualTime(() -> processor(hung, 1).process(Flux.just(telemetry("dev-001", 20, 1))))
+                .expectSubscription()
+                .thenAwait(Duration.ofSeconds(4))
+                .then(() -> assertThat(acked).isEmpty())   // antes del plazo (5 s): esperando
+                .thenAwait(Duration.ofSeconds(2))          // vence el plazo → reintento
+                .assertNext(o -> assertThat(o.type()).isEqualTo(Outcome.Type.PERSISTED))
+                .verifyComplete();
+        assertThat(attempts).hasValue(2);
+        assertThat(count("telemetry.store.retries")).isEqualTo(1);
+    }
+
+    @Test
+    void statusIsPersistedWithTheSameRetryPolicy() {
+        AtomicInteger attempts = new AtomicInteger();
+        TelemetryStore flakyStatus = new TelemetryStore() {
+            @Override public Mono<StoreResult> save(Telemetry t) { return Mono.just(StoreResult.INSERTED); }
+            @Override public Mono<Void> saveStatus(DeviceStatus s) {
+                return attempts.incrementAndGet() == 1 ? Mono.error(new RuntimeException("caída")) : Mono.empty();
+            }
+        };
+        InboundMessage status = inbound("iot/devices/dev-001/status", "{\"deviceId\":\"dev-001\",\"status\":\"offline\"}");
+        StepVerifier.withVirtualTime(() -> processor(flakyStatus, 1).process(Flux.just(status)))
+                .expectSubscription()
+                .thenAwait(Duration.ofSeconds(1))
+                .assertNext(o -> assertThat(o.type()).isEqualTo(Outcome.Type.STATUS))
+                .verifyComplete();
+        assertThat(attempts).hasValue(2);
+        assertThat(acked).containsExactly(status.ackToken());
     }
 
     @Test

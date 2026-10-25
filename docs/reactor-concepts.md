@@ -48,8 +48,14 @@ Estado: ✅ documentado · ⏳ pendiente (fase en la que se usa).
 | `onErrorResume` | ✅ | `TelemetryProcessor#persist` |
 | `doOnError` | ✅ | `TelemetryProcessor#process` |
 | `doFinally` vs `doOnTerminate` | ✅ | `TelemetryProcessor#persist`, `PipelineRunner` |
-| `concatMap` | ⏳ fase 6 | experimento 2 |
-| `buffer` / `bufferTimeout` | ⏳ fase 3 | inserción por lotes |
+| `timeout` | ✅ | `TelemetryProcessor#withRetry` |
+| `Flux.interval` + `concatMap` + `onBackpressureDrop` | ✅ | `DeviceRegistryFlusher` |
+| `Mono.zip` | ✅ | `MetricsController` |
+| `switchIfEmpty` | ✅ | `DeviceController` |
+| `Hooks.onErrorDropped` | ✅ | `ReactorHooksConfig` |
+| `block()` (dónde sí) | ✅ | `R2dbcPoolWarmup`, `DeviceRegistryFlusher#stop` |
+| `concatMap` (vs `flatMap` en el pipeline) | ⏳ fase 6 | experimento 2 |
+| `buffer` / `bufferTimeout` | ⏳ fase 6 | variante por lotes (ADR-013) |
 | `sample` | ⏳ fase 4 | Pipeline B |
 
 ---
@@ -148,3 +154,43 @@ lo hacen, y aquí no se usan porque ningún paso bloquea.
 - **Hallazgo de la fase 2:** el gauge de escrituras en curso con `doFinally` mostraba `concurrency + 1`. Al propagarse el `onComplete`, `flatMap` ya se había suscrito a la escritura siguiente antes de que `doFinally` restara (`TelemetryProcessorTest#flatMapNeverExceedsConfiguredConcurrency`). Se usa `doOnTerminate` + `doOnCancel`.
 - **`doFinally` sí es lo correcto** cuando importa cualquier forma de terminar y el orden no: `PipelineRunner` lo usa para liberar el latch de apagado.
 
+
+---
+
+## Fase 3 — persistencia
+
+### `timeout(Duration)` — dónde: `TelemetryProcessor#withRetry`
+- **Qué hace:** si el publisher no emite nada en el plazo, cancela la suscripción de arriba y emite `TimeoutException`.
+- **Por qué:** una base **colgada** (congelada, red partida) no devuelve error: la escritura quedaría esperando para siempre y ocuparía una de las 20 ranuras de `flatMap`. Con 20 colgadas, el pipeline se detiene sin un solo error en el log.
+- **Ubicación: antes de `retryWhen`.** Así el plazo es **por intento**: vence, `retryWhen` recibe el `TimeoutException` (transitorio) y vuelve a intentar con un plazo nuevo. Después de `retryWhen`, sería un plazo total para todos los intentos.
+- **Alternativa:** el timeout del pool (`max-acquire-time`) cubre solo la espera por una conexión, no una consulta que se cuelga una vez obtenida la conexión. El `statement_timeout` de PostgreSQL lo aplica el servidor: no sirve si el servidor está congelado.
+- **Hilos:** el plazo lo mide `Schedulers.parallel()`; el error se emite en ese hilo.
+- **Efecto secundario:** al cancelar, la operación de abajo puede terminar con error más tarde y Reactor no tiene a quién entregarlo: ver `Hooks.onErrorDropped`.
+
+### `Flux.interval` + `onBackpressureDrop` + `concatMap` — dónde: `DeviceRegistryFlusher`
+- **Qué hace:** cada 5 s, un tick dispara un flush de `last_seen`. `concatMap` espera a que termine un flush antes de empezar el siguiente.
+- **Por qué `concatMap` y no `flatMap`:** con la base lenta, `flatMap` lanzaría flushes superpuestos que pelean por las mismas filas. Aquí el orden y la exclusión mutua importan más que el throughput: es el caso de uso típico de `concatMap`.
+- **Por qué `onBackpressureDrop`:** `interval` no puede frenar el tiempo. Si un flush tarda más que el período, `concatMap` no pide el siguiente tick e `interval` fallaría con `OverflowException`. Descartar ticks es correcto, porque el próximo flush escribe todo lo acumulado.
+- **Hilos:** los ticks salen de `Schedulers.parallel()`; el flush continúa en el event loop de R2DBC.
+- **Errores:** `onErrorResume` dentro de `concatMap`: un flush fallido (base caída) no termina el `interval`. Los valores se reponen para el siguiente.
+
+### `Mono.zip` — dónde: `MetricsController#overview`
+- **Qué hace:** se suscribe a varios `Mono` **a la vez** y emite una tupla cuando todos terminaron.
+- **Por qué:** las dos consultas (conteos de dispositivos y de filas) son independientes. En secuencia (`a.flatMap(x -> b…)`) se sumarían sus latencias; con `zip`, cuenta solo la mayor.
+- **Errores:** si una falla, `zip` cancela la otra y propaga el error.
+- **Vacío:** si alguno completa vacío, `zip` completa vacío. Aquí las dos consultas siempre devuelven una fila.
+
+### `switchIfEmpty` — dónde: `DeviceController`
+- **Qué hace:** si el `Mono` completa sin valor (la consulta no encontró filas), se suscribe a la alternativa: aquí `Mono.error(404)`.
+- **Cuándo se ejecuta:** el argumento se **arma** siempre (assembly), pero solo se **suscribe** si hace falta. Por eso `notFound()` devuelve un `Mono.error` y no lanza la excepción directamente.
+- **Alternativa:** `defaultIfEmpty(valor)`; `Mono.defer` si armar la alternativa fuera costoso.
+
+### `Hooks.onErrorDropped` — dónde: `ReactorHooksConfig`
+- **Qué es:** un error emitido por un publisher cuyo suscriptor ya canceló. La regla de Reactive Streams prohíbe entregarlo, así que Reactor lo "descarta" y por defecto lo loguea como ERROR con stack trace.
+- **Cuándo pasó aquí:** al arrancar con el pool frío, `timeout()` canceló una escritura que esperaba conexión; el pool venció su propia espera un instante después y emitió su error a nadie. La escritura ya se había reintentado: no era una falla.
+- **Qué se hizo:** contarlo (`iotlab_reactor_errors_dropped_total`) y loguearlo en debug. Un valor que crece sin parar sí sería una señal a investigar.
+
+### `block()` — dónde **sí** se usa
+- **Regla del proyecto:** nunca en controladores ni en event loops (bloquear un event loop frena todas las conexiones que atiende).
+- **Excepciones documentadas:** `R2dbcPoolWarmup#start` y `DeviceRegistryFlusher#stop` corren en el hilo de arranque/apagado de Spring, que no es un event loop. Ahí bloquear es la única forma de garantizar un orden: el pool listo antes de MQTT, el último flush antes de cerrar el pool.
+- **En las pruebas** se usa `block()` para preparar datos, igual que `StepVerifier` bloquea para verificar.

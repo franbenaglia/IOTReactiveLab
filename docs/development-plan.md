@@ -40,7 +40,7 @@ Requisito previo: JDK 17 (ya instalado, ADR-004), ADR de Paho v3/v5 (P5), ADR de
 
 **Criterios:** el backend consume del simulador (100 dispositivos) sin errores; métricas visibles en `/actuator/metrics`; mensajes inválidos contados y el flujo sigue vivo; pruebas pasan.
 
-## Fase 3 — Persistencia reactiva ☐
+## Fase 3 — Persistencia reactiva ☑ (2026-10-25, evidencia en `testing.md`)
 - Flyway (JDBC al arranque, fuera de event loops) + R2DBC para la app.
 - Tablas `devices`, `telemetry`, índices, restricción de duplicados (P7).
 - Pipeline A con `flatMap` de concurrencia configurable, ligada al pool R2DBC; errores por elemento; reintentos.

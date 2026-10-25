@@ -247,3 +247,20 @@ fuera de esa red. Así, `mvn` no puede descargar nada (verificado).
 `--settings .mvn/settings.xml`, que apunta a Maven Central. Afecta solo a este
 proyecto y no toca la configuración global del usuario. Se suma Maven Wrapper
 (`mvnw`) para fijar la versión de Maven.
+
+---
+
+## ADR-013 — Diseño de la persistencia (fase 3)
+**Estado:** vigente · 2026-10-25
+
+**Decisiones.**
+1. **`DatabaseClient` con SQL explícito**, no repositorios derivados de Spring Data. La inserción necesita `ON CONFLICT ON CONSTRAINT telemetry_dedup DO NOTHING` (ADR-011), el listado de dispositivos usa `LEFT JOIN LATERAL` para la última medición, y `last_seen` se actualiza con `unnest` de arrays. Los repositorios derivados no ayudan en ninguno de los tres casos. Las clases se llaman `TelemetryRepository` y `DeviceRepository`, como pide main.md.
+2. **Una fila por mensaje, con `flatMap(concurrency)`.** Sin lotes (`bufferTimeout` + inserción múltiple) en esta fase: el experimento 1 compara justamente la concurrencia de `flatMap` sobre escrituras individuales. Los lotes quedan como variante para la fase 6.
+3. **`telemetry.device_id` es FK a `devices`.** Para no duplicar escrituras, `DeviceRegistry` recuerda los dispositivos ya dados de alta. Si la FK falla (SQLSTATE 23503, p. ej. alguien vació `devices`), se olvida el dispositivo y el error se trata como transitorio: el reintento lo da de alta de nuevo.
+4. **`last_seen` por lotes**, cada `iotlab.devices.last-seen-flush` (5 s), en una sola sentencia. Es aproximado por diseño: si el backend cae, se pierden como mucho esos segundos de `last_seen`, nunca telemetría.
+5. **`status` se persiste en `devices`** (upsert ordenado por hora de recepción, que descarta estados viejos que llegan tarde) **con la misma política de reintentos** que la telemetría, y se confirma recién al guardarse.
+6. **Clasificación de errores por SQLSTATE** (`R2dbcTelemetryStore#isTransient`): las clases 22, 23 y 42 no son transitorias, salvo 23503; todo lo demás sí (conexión, pool, timeouts).
+7. **Plazo por intento de escritura** (`iotlab.pipeline.store-timeout`, 5 s) con `timeout()` antes de `retryWhen`: una base colgada no devuelve error, y sin plazo la escritura retendría su ranura de `flatMap` indefinidamente.
+8. **Pool R2DBC:** `initial-size` = concurrencia (20), `max-size` 25 (margen para la API y el flush). Se precalienta (`R2dbcPoolWarmup`) antes de conectar MQTT, porque al arrancar llega de golpe lo acumulado en la sesión.
+9. **Host `127.0.0.1` por defecto, no `localhost`**, para R2DBC: ver el hallazgo en `progress.md` (fase 3).
+10. **P8 cerrado:** los `status` retained de dispositivos que nunca enviaron telemetría crean filas en `devices` (status sin `source`). Es lo esperado: un dispositivo que solo dijo "offline" existe. Para limpiar los restos de las pruebas: `simulator/tools/clear_retained.py --prefix <prefijo>` en el broker y `DELETE` en la base.

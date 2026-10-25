@@ -3,85 +3,52 @@ package com.example.iotlab;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-import com.example.iotlab.metrics.PipelineMetrics;
 import com.example.iotlab.mqtt.MqttHealthIndicator;
+import com.example.iotlab.support.IntegrationTest;
 import com.example.iotlab.support.Messages;
-import com.example.iotlab.support.MosquittoContainer;
-import io.micrometer.core.instrument.MeterRegistry;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import org.eclipse.paho.mqttv5.client.MqttAsyncClient;
-import org.eclipse.paho.mqttv5.client.persist.MemoryPersistence;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.health.contributor.Status;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
-/** La aplicación completa contra un Mosquitto real: MQTT → Sink → Pipeline A → PUBACK. */
-@SpringBootTest(properties = "spring.config.import=")
-@Testcontainers
-class BackendMqttIT {
+/** De punta a punta: MQTT → Pipeline A → PostgreSQL → PUBACK. */
+class BackendMqttIT extends IntegrationTest {
 
-    @Container
-    static final MosquittoContainer broker = new MosquittoContainer();
-
-    @DynamicPropertySource
-    static void mqtt(DynamicPropertyRegistry r) {
-        r.add("iotlab.mqtt.server-uri", broker::serverUri);
-        r.add("iotlab.mqtt.password", () -> "");
-        r.add("iotlab.mqtt.client-id", () -> "it-backend-app");
-    }
-
-    @Autowired MeterRegistry registry;
     @Autowired MqttHealthIndicator health;
 
-    double counter(String name, String... tags) {
-        var c = registry.find(PipelineMetrics.PREFIX + name).tags(tags).counter();
-        return c == null ? 0 : c.count();
-    }
-
-    double gauge(String name) {
-        return registry.get(PipelineMetrics.PREFIX + name).gauge().value();
-    }
-
-    static String now() {
-        return java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS).toString();
-    }
-
     @Test
-    void processesValidInvalidAndStatusMessagesAndAcksEverything() throws Exception {
+    void persistsValidMessagesDeduplicatesRedeliveriesAndAcksEverything() throws Exception {
         await().atMost(Duration.ofSeconds(10)).until(() -> health.health().getStatus().equals(Status.UP));
+        double valid0 = counter("telemetry.valid");
+        double inserted0 = counter("telemetry.stored", "result", "inserted");
+        double dup0 = counter("telemetry.stored", "result", "duplicate");
+        double acks0 = counter("mqtt.acks", "result", "sent");
+        double invalid0 = counter("telemetry.invalid", "reason", "malformed_json");
 
-        MqttAsyncClient pub = new MqttAsyncClient(broker.serverUri(), "it-device-sim", new MemoryPersistence());
-        pub.connect().waitForCompletion(5000);
-        for (int i = 1; i <= 300; i++) {
-            String id = "esp32-sim-" + String.format("%05d", i % 10 + 1);
-            pub.publish("iot/devices/" + id + "/telemetry",
-                    Messages.telemetryJson(id, 20 + i % 5, i, now()).getBytes(StandardCharsets.UTF_8), 1, false);
+        MqttAsyncClient pub = publisher("it-e2e-sim");
+        String[] payloads = new String[300];
+        for (int i = 0; i < 300; i++) {
+            String id = String.format("e2e-%03d", i % 10);
+            payloads[i] = Messages.telemetryJson(id, 20 + i % 5, i, now());
+            publish(pub, "iot/devices/" + id + "/telemetry", payloads[i]);
         }
-        pub.publish("iot/devices/esp32-sim-00001/telemetry", "{roto".getBytes(StandardCharsets.UTF_8), 1, false);
-        pub.publish("iot/devices/esp32-sim-00001/telemetry",
-                Messages.telemetryJson("esp32-sim-00001", 999, 1, now()).getBytes(StandardCharsets.UTF_8), 1, false);
-        pub.publish("iot/devices/esp32-sim-00001/status",
-                "{\"deviceId\":\"esp32-sim-00001\",\"status\":\"online\",\"timestamp\":\"2026-10-25T12:30:00Z\"}"
-                        .getBytes(StandardCharsets.UTF_8), 1, false).waitForCompletion(5000);
+        // 20 reenvíos idénticos: lo que haría un productor que no recibió el PUBACK.
+        for (int i = 0; i < 20; i++) {
+            String id = String.format("e2e-%03d", i % 10);
+            publish(pub, "iot/devices/" + id + "/telemetry", payloads[i]);
+        }
+        publish(pub, "iot/devices/e2e-000/telemetry", "{roto");
 
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
-            assertThat(counter("telemetry.valid")).isEqualTo(300);
-            assertThat(counter("telemetry.invalid", "reason", "malformed_json")).isEqualTo(1);
-            assertThat(counter("telemetry.invalid", "reason", "out_of_range")).isEqualTo(1);
-            assertThat(counter("status.received", "state", "online")).isEqualTo(1);
-            assertThat(counter("telemetry.stored", "result", "inserted")).isEqualTo(300);
-            assertThat(counter("mqtt.acks", "result", "sent")).isEqualTo(303);
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            assertThat(counter("telemetry.valid") - valid0).isEqualTo(320);
+            assertThat(counter("telemetry.stored", "result", "inserted") - inserted0).isEqualTo(300);
+            assertThat(counter("telemetry.stored", "result", "duplicate") - dup0).isEqualTo(20);
+            assertThat(counter("telemetry.invalid", "reason", "malformed_json") - invalid0).isEqualTo(1);
+            assertThat(counter("mqtt.acks", "result", "sent") - acks0).isEqualTo(321);
             assertThat(gauge("mqtt.acks.pending")).isZero();
         });
-        assertThat(counter("mqtt.dropped", "reason", "sink_rejected")).isZero();
-        assertThat(counter("mqtt.acks", "result", "failed")).isZero();
-        assertThat(gauge("mqtt.connected")).isEqualTo(1);
+        assertThat(rows("e2e-")).isEqualTo(300);
         pub.disconnect().waitForCompletion(5000);
     }
 }

@@ -1,6 +1,6 @@
 # Arquitectura
 
-Estado: fase 2 completada (infraestructura, simulador, backend MQTT + Reactor sin persistencia). Se actualiza al cerrar cada fase. Decisiones de
+Estado: fase 3 completada (infraestructura, simulador, backend con persistencia R2DBC y API REST). Se actualiza al cerrar cada fase. Decisiones de
 fondo en `decisions.md`.
 
 ## Vista de componentes
@@ -130,3 +130,27 @@ lo no confirmado lo reentrega el broker en el próximo arranque.
 `telemetry_store_retries`, `telemetry_store_inflight`,
 `telemetry_sequence_resets`, `status_received{state}` y `pipeline_latency`
 (p50/p95/p99).
+
+## Persistencia y API (fase 3, ADR-013)
+
+| Clase | Paquete | Responsabilidad |
+|---|---|---|
+| `R2dbcTelemetryStore` | `persistence` | `TelemetryStore` real: alta del dispositivo + `INSERT … ON CONFLICT`; status; clasificación de errores por SQLSTATE |
+| `TelemetryRepository`, `DeviceRepository` | `persistence` | SQL explícito con `DatabaseClient` |
+| `DeviceRegistry` + `DeviceRegistryFlusher` | `persistence` | Alta única por dispositivo (FK), `last_seen` por lotes cada 5 s |
+| `R2dbcPoolWarmup` | `persistence` | Conexiones listas antes de MQTT |
+| `DeviceController`, `MetricsController` | `api` | REST: `/api/devices`, `/{id}`, `/{id}/latest`, `/{id}/history`, `/api/metrics/overview` |
+| `ApiExceptionHandler` | `exception` | 400/404 como ProblemDetail |
+| `ReactorHooksConfig` | `config` | `Hooks.onErrorDropped` → métrica |
+
+**Esquema** (`db/migration/V1__devices_and_telemetry.sql`, Flyway por JDBC
+al arrancar): `devices(id, device_id UNIQUE, source, status,
+status_changed_at, last_seen, created_at)` y `telemetry(id, device_id FK,
+temperature, humidity, measured_at, received_at, sequence)` con `UNIQUE
+(device_id, measured_at, sequence)`, que sirve a la vez para deduplicar y para
+las consultas.
+
+**Orden de arranque** (`SmartLifecycle`, de menor a mayor fase):
+`R2dbcPoolWarmup` (-200) → `DeviceRegistryFlusher` (-100) → `PipelineRunner`
+(0) → `MqttSubscriber` (100). La parada es en orden inverso: MQTT primero,
+el flush final de `last_seen` al último.
