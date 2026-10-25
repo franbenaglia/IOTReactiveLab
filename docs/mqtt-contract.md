@@ -53,8 +53,9 @@ Payload JSON, retained:
 
 ## Garantías y deduplicación
 
-- QoS 1 = **al menos una vez**: puede haber duplicados (reenvío tras PUBACK perdido). El backend deduplica por `(deviceId, sequence)` con restricción única en la base.
-- **Abierto (P7):** `sequence` se reinicia si el dispositivo reinicia (ESP32 sin persistencia, simulador relanzado), y una restricción única pura descartaría mediciones legítimas. Opciones: persistir `sequence` en NVS en el firmware; incluir `measured_at` en la clave; o agregar un campo `bootId`. Decidir en fase 2-3 con un ADR.
+- QoS 1 = **al menos una vez**: puede haber duplicados (reenvío tras un PUBACK perdido, o reentrega de la sesión persistente del backend). El backend confirma cada mensaje recién cuando lo guardó (ADR-010).
+- **Deduplicación (ADR-011):** clave única `(deviceId, timestamp, sequence)`. Una reentrega es el mismo payload byte a byte y se descarta. Tras un reinicio, `sequence` vuelve a 1 con otro `timestamp` y se acepta.
+- **Obligación de los productores:** armar el payload una sola vez y reenviarlo idéntico. El `timestamp` debe ser real: el ESP32 no publica hasta sincronizar NTP.
 - Mensajes con JSON malformado o campos inválidos se cuentan como rechazados (métrica) y no detienen el flujo.
 
 ## Ejemplos para pruebas manuales

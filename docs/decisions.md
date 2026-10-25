@@ -143,3 +143,101 @@ desconexión con will); un hilo `loop_start()` por cliente (1.000 hilos).
 **Consecuencias.** Sin dependencias extra además de paho y PyYAML. El
 backend puede usar MQTT 3.1.1 o 5 (P5) sin afectar al simulador: Mosquitto
 traduce entre versiones.
+
+---
+
+## ADR-009 — Backend: cliente Paho MQTT 5 (`mqttv5`) — resuelve P5
+**Estado:** vigente (aprobado por el usuario) · 2026-10-25
+
+**Contexto.** Paho Java ofrece `client.mqttv3` y `mqttv5.client`, ambos 1.2.5.
+Verificado con `javap` sobre los jars: los dos tienen `setManualAcks` y
+`messageArrivedComplete`, pero en v3 `setMaxInflight` limita solo lo que el
+cliente **publica**. El límite de mensajes **recibidos** sin confirmar es, en
+3.1.1, un valor global del broker (`max_inflight_messages`). En v5 el cliente
+lo declara en el CONNECT: `setReceiveMaximum`.
+
+**Opciones.**
+1. **v5**: `ReceiveMaximum` configurable desde el backend (perilla de backpressure para el experimento 3), sesión persistente con `cleanStart=false` + `sessionExpiryInterval`, reason codes en los errores.
+2. v3.1.1: la API más usada y probada. El límite de entrada depende solo del broker; la sesión persistente es `cleanSession=false` sin expiración propia.
+
+**Decisión.** v5. Encaja con el objetivo del laboratorio: el
+backend controla cuánto trabajo acepta. Mosquitto traduce entre versiones,
+así que el ESP32 (3.1.1) y el simulador (5) no se ven afectados.
+
+**Riesgo y verificación.** `mqttv5.client` tiene menos uso que v3. Al inicio
+de la fase 2, una prueba de integración debe demostrar: (a) el broker nunca
+entrega más de `ReceiveMaximum` mensajes sin confirmar; (b) un mensaje no
+confirmado se reentrega al reconectar. Si alguna falla, se vuelve a v3 con
+este ADR reemplazado.
+
+---
+
+## ADR-010 — Política de entrega MQTT → PostgreSQL — resuelve P4
+**Estado:** vigente (aprobado por el usuario) · 2026-10-25
+
+**Contexto.** main.md §8 pide no depender solo de un Sink en memoria y
+definir explícitamente entrega, reintentos y recuperación. Con auto-ack, Paho
+confirma el mensaje al volver del callback: si el backend cae o el sink está
+lleno, el mensaje se pierde sin que nadie lo sepa.
+
+**Decisión: al menos una vez de punta a punta + escritura idempotente.**
+
+1. **Confirmación manual.** El PUBACK se envía cuando el mensaje llega a un estado final, no al recibirlo:
+   | Resultado | ¿Se confirma? | Métrica |
+   |---|---|---|
+   | Insertado en PostgreSQL | sí | `persisted` |
+   | Duplicado (la base lo rechazó por la clave única) | sí | `duplicate` |
+   | Inválido (JSON, campos, rango) | sí, de inmediato: reentregarlo no lo arregla | `invalid{reason}` |
+   | Falla de la base | **no**: se reintenta con backoff exponencial (`retryWhen`) sin límite de intentos | `persist_retry` |
+2. **Orden de los PUBACK.** MQTT exige confirmar QoS 1 en el orden de llegada (§4.6, en 3.1.1 y en 5), pero `flatMap` completa fuera de orden. Un `AckTracker` libera cada PUBACK recién cuando se completaron todos los anteriores, igual que el commit de offsets en Kafka. Un mensaje que nunca llega a estado final bloquearía todos los siguientes: por eso todo camino del pipeline termina en uno de los estados de la tabla.
+3. **Backpressure real hasta el broker.** Con la base lenta o caída no se confirma nada, se llenan las `ReceiveMaximum` ranuras (ADR-009) y el broker deja de entregar: encola hasta `max_queued_messages` (10.000) para la sesión del backend. Más allá descarta, y es medible en `$SYS`. Es el límite documentado del backpressure con MQTT: el broker es el buffer.
+4. **Sesión persistente.** `clientId` fijo (`iotlab-backend`), `cleanStart=false`, expiración de sesión configurable (1 h por defecto). Si el backend se reinicia, el broker reentrega lo no confirmado y la clave única absorbe los duplicados (ADR-011).
+5. **Sink acotado por construcción.** `Sinks.many().unicast().onBackpressureBuffer(cola de ReceiveMaximum)`. El broker nunca envía más que `ReceiveMaximum` sin confirmar, así que la cola no puede desbordar. Si `tryEmitNext` falla igual (bug), se registra `dropped{reason}` y se confirma, para no bloquear el `AckTracker`. Una prueba verifica que no ocurre con carga.
+6. **Tiempo real separado.** Los pipelines B (WebSocket) y C (alertas) se alimentan de otro sink, `multicast().directBestEffort()`. Un cliente lento pierde actualizaciones y nunca frena la persistencia. Allí perder intermedias es aceptable (main.md §8).
+7. **Ciclo de vida.** Al arrancar se suscriben primero los pipelines y después se conecta MQTT. Al detener: se desconecta MQTT, se esperan las escrituras en curso con un plazo, y se liberan los `Disposable`.
+
+**Consecuencias.** No se pierde ningún mensaje que el broker haya aceptado
+mientras su cola no se llene. Puede haber duplicados en tránsito, pero nunca en
+la base. Es un diseño más complejo que el auto-ack, a cambio de concentrar lo
+más educativo del proyecto (backpressure, orden, reintentos). Kafka sigue
+siendo innecesario en la v1.
+
+---
+
+## ADR-011 — Clave de deduplicación: `(device_id, measured_at, sequence)` — resuelve P7
+**Estado:** vigente (aprobado por el usuario) · 2026-10-25
+
+**Contexto.** `sequence` vuelve a 1 cuando un dispositivo reinicia (el ESP32
+sin persistencia, o el simulador relanzado). Una clave `(device_id, sequence)`
+descartaría mediciones legítimas.
+
+**Opciones.**
+1. `UNIQUE (device_id, sequence)` + persistir `sequence` en NVS en el ESP32. No resuelve el simulador relanzado y desgasta la flash.
+2. **`UNIQUE (device_id, measured_at, sequence)`**. Una reentrega MQTT es byte a byte el mismo payload (mismo `timestamp`, misma `sequence`): se detecta. Tras un reinicio se repite la `sequence`, pero con otro `timestamp`: no hay conflicto.
+3. Agregar `bootId` al contrato. Es la semántica más limpia, pero cambia el contrato de main.md §4.
+
+**Decisión.** Opción 2. Es la única sin cambio de contrato ni de
+firmware, y **el mismo índice sirve para las consultas históricas** (`WHERE
+device_id = ? AND measured_at BETWEEN …`, y la última medición con `ORDER BY
+measured_at DESC`). Un solo índice para deduplicación e historia. Inserción
+con `INSERT … ON CONFLICT DO NOTHING`; 0 filas afectadas = duplicado.
+
+**Consecuencias.** La deduplicación depende de que el productor arme el
+payload una sola vez y lo reenvíe idéntico, cosa que cumplen paho y
+256dpi/MQTT. Requiere hora válida en el dispositivo: el ESP32 no publica hasta
+sincronizar NTP (ADR-003). Se agrega la métrica `sequence_reset` cuando la
+`sequence` de un dispositivo retrocede, que indica que se reinició.
+
+---
+
+## ADR-012 — Maven del backend: settings propio del proyecto
+**Estado:** vigente (aprobado por el usuario) · 2026-10-25
+
+**Contexto.** `~/.m2/settings.xml` del usuario redirige **todos** los
+repositorios (`mirrorOf *`) a un Archiva de la intranet de SENASA, inaccesible
+fuera de esa red. Así, `mvn` no puede descargar nada (verificado).
+
+**Decisión.** `backend/.mvn/maven.config` con
+`--settings .mvn/settings.xml`, que apunta a Maven Central. Afecta solo a este
+proyecto y no toca la configuración global del usuario. Se suma Maven Wrapper
+(`mvnw`) para fijar la versión de Maven.

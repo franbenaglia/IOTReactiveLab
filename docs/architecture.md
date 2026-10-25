@@ -48,11 +48,25 @@ fondo en `decisions.md`.
 | `metrics` | Binders Micrometer, overview de métricas |
 | `exception` | Errores de dominio y manejo global |
 
-## Fronteras críticas (a detallar en fase 2-3)
+## Fronteras críticas (ADR-009, ADR-010)
 
-1. **Callback Paho → Reactor.** Hilo de Paho ≠ event loop. El sink es acotado; si está lleno, el mensaje se cuenta como descartado y (según P4) se decide si se hace ACK manual o no.
-2. **Reactor → R2DBC.** Concurrencia de `flatMap` ≤ tamaño del pool.
-3. **Reactor → WebSocket.** Cada cliente con su propia política de backpressure (descartar/último) para que un cliente lento no frene al resto.
+```text
+Mosquitto ──(ReceiveMaximum N sin confirmar)──► Paho v5, confirmación manual
+                                                     │ hilo de callback de Paho
+                                                     ▼
+                              Sinks.many().unicast() (cola N: no desborda por construcción)
+                                                     │
+                     Pipeline A: validar → normalizar → flatMap(INSERT … ON CONFLICT, c ≤ pool R2DBC)
+                                                     │ estado final por mensaje
+                                                     ▼
+                                    AckTracker → PUBACK en orden de llegada
+              y en paralelo:  Sinks.many().multicast().directBestEffort() → Pipelines B y C
+```
+
+1. **Callback Paho → Reactor.** El hilo de Paho no es un event loop: el callback solo emite al sink y vuelve. Nada se confirma al recibirlo.
+2. **Reactor → R2DBC.** Concurrencia de `flatMap` ≤ tamaño del pool. Una falla de la base se reintenta con backoff sin confirmar: se llenan las N ranuras y el broker deja de entregar (backpressure hasta el broker, que encola hasta `max_queued_messages`).
+3. **PUBACK en orden.** El `AckTracker` libera confirmaciones solo cuando se completaron todas las anteriores (MQTT §4.6).
+4. **Reactor → WebSocket.** Sink multicast best-effort: un cliente lento pierde actualizaciones y no frena la persistencia.
 
 ## Red (ADR-005)
 
