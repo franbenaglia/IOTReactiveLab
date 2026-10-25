@@ -1,0 +1,31 @@
+# Secretos — nunca subir (CLAUDE.md §3). Versionar solo los *.example.
+.env
+secrets.ini
+infra/mosquitto/passwd
+infra/mosquitto/*.passwd
+
+# Claude Code: ajustes locales de cada máquina
+.claude/settings.local.json
+
+# Firmware
+.pio/
+firmware/**/.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Java
+target/
+
+# Node
+node_modules/
+dist/
+
+# Editores / SO
+.idea/
+*.iml
+.DS_Store
