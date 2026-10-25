@@ -65,14 +65,14 @@ hora sincronizada (o se publica con la política que fije `mqtt-contract.md`).
 ---
 
 ## ADR-004 — Versiones base
-**Estado:** propuesta (confirmar al iniciar fase 2) · 2026-10-25
+**Estado:** vigente (Java confirmado por el usuario; librerías a revalidar al iniciar fase 2) · 2026-10-25
 
-**Decisión preliminar.** Java 21 LTS, Spring Boot 4.1.x (4.1.2 última estable
+**Decisión.** **Java 17 LTS** (el JDK ya instalado), y no 21 como sugiere main.md §2: Spring Boot 4.x exige 17 como mínimo, y nada del stack (WebFlux, Reactor, R2DBC, Paho) necesita 21. El usuario eligió no instalar otro JDK. Resto: Spring Boot 4.1.x (4.1.2 última estable
 al 2026-10-25), Paho Java 1.2.5, r2dbc-postgresql 1.1.x, Flyway (versión
 gestionada por Spring Boot), Testcontainers 2.x, PostgreSQL 17, Mosquitto 2.x,
 paho-mqtt Python 2.1, React + Vite + TS (versiones actuales al iniciar fase 4).
 
-**Consecuencias.** Requiere instalar JDK 21 (P1). Las versiones de librerías
+**Consecuencias.** Sin features de Java 21 (pattern matching en `switch` con records, sequenced collections, virtual threads). Virtual threads no aplican igual en un backend reactivo. Migrar a 21 o 25 más adelante solo implica cambiar `java.version` en el `pom.xml`. Las versiones de librerías
 del backend se toman del BOM de Spring Boot salvo que no estén gestionadas.
 
 ---

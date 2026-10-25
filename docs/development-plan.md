@@ -30,7 +30,7 @@ fase se cierra solo cuando todos sus criterios tienen evidencia en
 6. `pytest` pasa.
 
 ## Fase 2 — Backend MQTT + Reactor ☐
-Requisito previo: JDK 21 (P1), ADR de Paho v3/v5 (P5), ADR de política de entrega (P4).
+Requisito previo: JDK 17 (ya instalado, ADR-004), ADR de Paho v3/v5 (P5), ADR de política de entrega (P4).
 
 - Proyecto Spring Boot 4.1.x (WebFlux, Actuator, Micrometer), paquetes según ADR-001.
 - `MqttSubscriber` (Paho async, reconexión, cierre ordenado).

@@ -7,14 +7,13 @@ abrir cada sesión: mantenerla corta y al día.
 
 - **Fase:** 1 — Infraestructura y simulador → **completada y validada** (2026-10-25). Próxima: **Fase 2** (backend MQTT + Reactor).
 - **Última tarea:** carga 10/100/1.000 (y 5.000) en modos A y B: pedidos = confirmados = recibidos, sin errores. Evidencia en `testing.md`.
-- **Próximo paso:** antes de codificar la fase 2, instalar JDK 21 (P1) y cerrar con `architect` los ADR de P4 (política de entrega), P5 (Paho v3/v5) y P7 (clave de deduplicación).
+- **Próximo paso:** antes de codificar la fase 2, cerrar con `architect` los ADR de P4 (política de entrega), P5 (Paho v3/v5) y P7 (clave de deduplicación).
 - **En curso / a medias:** nada.
 
 ## Pendientes / bloqueos
 
 | # | Pendiente | Bloquea | Notas |
 |---|---|---|---|
-| P1 | Instalar JDK 21 (solo hay 8, 11 y 17) | Fase 2 | `sudo apt install openjdk-21-jdk` (21.0.12 disponible en apt). Spring Boot 4.1 funciona con 17, pero main.md pide 21+. Ver ADR-004 |
 | P4 | Política de entrega MQTT → persistencia (ack, reintentos, recuperación) | Fase 2-3 | Decisión de arquitectura abierta (main.md §8 Pipeline A) |
 | P5 | Paho Java: cliente `mqttv3` o `mqttv5` | Fase 2 | Ambos 1.2.5 en Maven Central |
 | P6 | Mosquitto CLI no instalado en el host | — | Usar `docker compose exec mosquitto mosquitto_sub ...` (ver README) |
@@ -28,7 +27,7 @@ Detectado el 2026-10-25 en la notebook de desarrollo (Linux, Ubuntu 22.04):
 
 | Herramienta | Versión | Estado |
 |---|---|---|
-| Java | OpenJDK 17.0.19 | **Falta 21** (P1) |
+| Java | OpenJDK 17.0.19 | OK — se usa 17 (ADR-004) |
 | Maven | 3.8.6 | OK (Spring Boot 4.x pide ≥ 3.6.3) |
 | Docker / Compose | 29.8.0 / v5.5.1 | OK |
 | Python | 3.10.12 | OK |
@@ -45,7 +44,7 @@ Revalidar compatibilidad al comenzar cada fase (ADR-004).
 ## Registro
 
 ### 2026-10-25 — Fase 1: infraestructura y simulador
-- Decisiones del usuario: firmware con `256dpi/MQTT` (QoS 1) y NTP → ADR-003 resuelto. Sobre Java 21: Spring Boot 4.1 corre con 17, pero main.md pide 21+; se mantiene P1.
+- Decisiones del usuario: firmware con `256dpi/MQTT` (QoS 1) y NTP → ADR-003 resuelto. Sobre Java 21: Spring Boot 4.1 corre con 17, pero main.md pide 21+; el usuario eligió quedarse con Java 17 (ADR-004, P1 cerrado).
 - `docker-compose.yml`: Mosquitto 2.0.22 (auth + ACL, contraseñas generadas al arrancar desde `.env`, ADR-007) y PostgreSQL 17.11 (solo localhost). Healthchecks OK. `.env` local generado con contraseñas aleatorias.
 - Problema: Mosquitto avisaba que el ACL montado era legible por todos y el entrypoint de la imagen hacía `chown -R` sobre el montaje de solo lectura. Solución: montar en `/iotlab/mosquitto` y copiar a `/mosquitto/run` con `umask 077`.
 - Simulador (`simulator/`): paho-mqtt integrado al event loop de asyncio (ADR-008), MQTT 5, modos normal/random/burst/load, flags de desconexión/inválidos/picos/humedad, modos de conexión A y B, estadísticas pedidos vs confirmados (PUBACK) con latencia de ACK.
