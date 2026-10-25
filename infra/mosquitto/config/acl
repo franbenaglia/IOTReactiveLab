@@ -1,0 +1,19 @@
+# ACL de Mosquitto. Ver ADR-007. Los usuarios y sus contraseñas los crea
+# entrypoint.sh desde .env.
+
+# Backend: consume telemetría y estado de todos los dispositivos.
+user backend
+topic read iot/devices/#
+topic read $SYS/#
+
+# Simulador: un solo usuario para N dispositivos virtuales.
+user simulator
+topic write iot/devices/#
+
+# Healthcheck del contenedor.
+user healthcheck
+topic read $SYS/#
+
+# Dispositivos físicos: el usuario MQTT es su deviceId y solo puede publicar
+# en sus propios topics (iot/devices/esp32-real-001/telemetry, .../status).
+pattern write iot/devices/%u/#

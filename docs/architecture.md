@@ -1,6 +1,6 @@
 # Arquitectura
 
-Estado: **inicial** (fase 0). Se actualiza al cerrar cada fase. Decisiones de
+Estado: fase 1 completada (infraestructura + simulador). Se actualiza al cerrar cada fase. Decisiones de
 fondo en `decisions.md`.
 
 ## Vista de componentes
@@ -61,3 +61,28 @@ fondo en `decisions.md`.
 | Contenedor en compose | `mosquitto:1883` | `postgres:5432` |
 | Proceso en el host | `localhost:1883` | `localhost:5432` |
 | ESP32 en la LAN | `<IP LAN del host>:1883` | — |
+
+## Simulador (fase 1)
+
+| Módulo | Responsabilidad |
+|---|---|
+| `iotsim/config.py` | Dataclasses de configuración, YAML + CLI, validación, contraseña |
+| `iotsim/contract.py` | Contrato MQTT en Python: topics, mensajes, inválidos, validación |
+| `iotsim/model.py` | Evolución de temperatura/humedad (paseo con reversión) |
+| `iotsim/device.py` | Dispositivo virtual: ID, secuencia, payloads |
+| `iotsim/timing.py` | Intervalos por modo |
+| `iotsim/connection.py` | paho ↔ asyncio, PUBACK, reconexión con backoff, LWT |
+| `iotsim/runner.py` | Armado A/B, una tarea por dispositivo, apagado ordenado |
+| `iotsim/stats.py` | Pedidos vs confirmados, latencia de ACK |
+
+Un proceso, un hilo de event loop para todas las conexiones; `connect()` en
+executor. Capacidad medida en la notebook de referencia: ~5.000 msg/s con
+conexiones compartidas; ~3.700 msg/s con 5.000 conexiones (límite del
+simulador, ver `testing.md`).
+
+## Mosquitto (fase 1)
+
+`infra/mosquitto/config/` se monta de solo lectura en `/iotlab/mosquitto`;
+`entrypoint.sh` genera `passwd` desde `.env` y copia `acl` y
+`mosquitto.conf` a `/mosquitto/run` con permisos 0700. Límites explícitos:
+`max_inflight_messages 100`, `max_queued_messages 10000`.

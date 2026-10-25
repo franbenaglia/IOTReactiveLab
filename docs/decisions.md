@@ -43,7 +43,7 @@ La pantalla TFT del proyecto de referencia queda **fuera del alcance** inicial.
 ---
 
 ## ADR-003 — Toolchain del firmware
-**Estado:** vigente (con dos puntos abiertos: P2, P3) · 2026-10-25
+**Estado:** vigente · 2026-10-25 (P2 y P3 resueltos el mismo día)
 
 **Decisión.**
 - PlatformIO, `platform = espressif32@7.0.1` (Arduino core 2.0.17 / ESP-IDF 4.4.7), la versión fijada y verificada en el hardware de referencia.
@@ -51,13 +51,14 @@ La pantalla TFT del proyecto de referencia queda **fuera del alcance** inicial.
 - ArduinoJson 7 para el payload.
 - Máquina de estados WiFi → MQTT → Listo con backoff exponencial separado por capa, sin bucles bloqueantes (portada del proyecto de referencia).
 
-**Abierto — P2, librería MQTT.** El proyecto de referencia usa PubSubClient
+**Resuelto — P2, librería MQTT: `256dpi/MQTT`** (confirmado por el usuario).
+Antecedente: El proyecto de referencia usa PubSubClient
 2.8, que **solo publica con QoS 0** y el contrato exige QoS 1. Candidatas:
 `256dpi/MQTT` (lwmqtt; publish QoS 1, LWT, síncrona) o `AsyncMqttClient`
-(asíncrona sobre AsyncTCP). Decidir al iniciar la fase 5; recomendación
-preliminar: 256dpi/MQTT, por API parecida a PubSubClient.
+(asíncrona sobre AsyncTCP). Se elige 256dpi/MQTT: publica QoS 1, soporta LWT y su API se parece a
+PubSubClient, lo que facilita portar la máquina de estados de la referencia.
 
-**Abierto — P3, NTP.** El contrato pide `timestamp` UTC; el proyecto de
+**Resuelto — P3, NTP: se agrega** (confirmado por el usuario). El contrato pide `timestamp` UTC; el proyecto de
 referencia no tenía NTP. Se agrega `configTime()` y no se publica hasta tener
 hora sincronizada (o se publica con la política que fije `mqtt-contract.md`).
 
@@ -101,3 +102,44 @@ tareas acotadas y devuelven informes. Flujo y tabla de delegación en
 **Consecuencias.** El estado del proyecto vive en archivos versionados, no en
 la memoria de la sesión; cualquier sesión nueva puede retomar leyendo
 `CLAUDE.md` → `progress.md` → `decisions.md`.
+
+---
+
+## ADR-007 — Mosquitto: autenticación con usuarios fijos y contraseñas desde `.env`
+**Estado:** vigente · 2026-10-25
+
+**Decisión.** `allow_anonymous false` desde el primer día. El archivo de
+contraseñas **no se versiona ni se monta**: el entrypoint del contenedor lo
+genera al arrancar con `mosquitto_passwd` a partir de variables de `.env`.
+Usuarios: `backend` (lee `iot/devices/#`), `simulator` (escribe
+`iot/devices/#`), `healthcheck` (lee `$SYS`), y uno por dispositivo físico
+cuyo usuario es su `deviceId` (ACL `pattern write iot/devices/%u/#`: un ESP32
+solo puede publicar en sus propios topics).
+
+**Consecuencias.** Cambiar una contraseña = editar `.env` y
+`docker compose up -d --force-recreate mosquitto`. El simulador no puede tener
+ACL por dispositivo (un usuario para N dispositivos virtuales).
+
+---
+
+## ADR-008 — Simulador: paho-mqtt integrado al event loop de asyncio
+**Estado:** vigente · 2026-10-25
+
+**Contexto.** main.md pide paho-mqtt + asyncio, sin un proceso por dispositivo.
+paho no es asyncio nativo.
+
+**Decisión.** Integrar cada `paho.Client` al event loop con sus callbacks de
+socket (`on_socket_open/close/register_write`, patrón del ejemplo oficial
+`loop_asyncio.py`): un único hilo atiende las N conexiones. Protocolo MQTT 5
+en el simulador, para poder desconectar con *reason code* 0x04 ("Disconnect
+with Will Message") y provocar el LWT a voluntad. `connect()` (bloqueante:
+DNS + TCP) se ejecuta en un executor, con un semáforo que limita conexiones
+simultáneas. Una publicación cuenta como **confirmada** solo al recibir el
+PUBACK (`on_publish`).
+
+**Alternativas descartadas.** `aiomqtt` (envuelve paho, pero no expone la
+desconexión con will); un hilo `loop_start()` por cliente (1.000 hilos).
+
+**Consecuencias.** Sin dependencias extra además de paho y PyYAML. El
+backend puede usar MQTT 3.1.1 o 5 (P5) sin afectar al simulador: Mosquitto
+traduce entre versiones.

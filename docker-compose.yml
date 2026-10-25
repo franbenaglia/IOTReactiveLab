@@ -1,0 +1,58 @@
+# IoT Reactive Lab — infraestructura local. Ver ADR-005 (red) y ADR-007 (auth).
+#
+#   cp .env.example .env    # y completar contraseñas
+#   docker compose up -d mosquitto postgres
+#
+# Backend y frontend se agregan en las fases 2 y 4.
+
+name: iotlab
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22
+    entrypoint: ["/bin/sh", "/iotlab/mosquitto/entrypoint.sh"]
+    environment:
+      MQTT_BACKEND_PASSWORD: ${MQTT_BACKEND_PASSWORD:?definir en .env}
+      MQTT_SIMULATOR_PASSWORD: ${MQTT_SIMULATOR_PASSWORD:?definir en .env}
+      MQTT_HEALTHCHECK_PASSWORD: ${MQTT_HEALTHCHECK_PASSWORD:?definir en .env}
+      MQTT_DEVICE_CREDENTIALS: ${MQTT_DEVICE_CREDENTIALS:-}
+    ports:
+      # 0.0.0.0 para que el ESP32 llegue por la IP LAN del host. En una red
+      # no confiable, usar MQTT_BIND=127.0.0.1 (sin ESP32).
+      - "${MQTT_BIND:-0.0.0.0}:${MQTT_PORT:-1883}:1883"
+    volumes:
+      # Fuera de /mosquitto: el entrypoint de la imagen hace chown -R ahí.
+      - ./infra/mosquitto/config:/iotlab/mosquitto:ro
+      - mosquitto-data:/mosquitto/data
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }   # una conexión = un descriptor
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -u healthcheck -P \"$$MQTT_HEALTHCHECK_PASSWORD\" -t '$$SYS/broker/uptime' -C 1 -W 5 >/dev/null"]
+      interval: 10s
+      timeout: 8s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17.11-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-iotlab}
+      POSTGRES_USER: ${POSTGRES_USER:-iotlab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?definir en .env}
+    ports:
+      # Solo localhost: a la base no necesita llegar nadie desde la LAN.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  mosquitto-data:
+  postgres-data:

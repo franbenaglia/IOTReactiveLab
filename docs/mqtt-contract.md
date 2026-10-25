@@ -35,8 +35,8 @@ coincide, el mensaje es inválido.
 | `deviceId` | string | sí | Igual al del topic |
 | `temperature` | number | sí | °C. Rango de validación del backend: configurable (por defecto -40 a 125) |
 | `humidity` | number \| null | no | % HR, 0-100. El DHT11 la envía; un sensor solo-temperatura manda `null` |
-| `timestamp` | string | sí | ISO-8601 UTC con `Z`, momento de la **medición** |
-| `sequence` | integer ≥ 0 | sí | Creciente por dispositivo |
+| `timestamp` | string | sí | ISO-8601 UTC con `Z`, momento de la **medición**. Fracción de segundo opcional (el simulador envía milisegundos: `2026-10-25T12:30:00.123Z`; el ESP32, segundos) |
+| `sequence` | integer ≥ 0 | sí | Creciente por dispositivo; la primera medición es 1 |
 | `source` | string | sí | `PHYSICAL` o `SIMULATED` |
 
 ## Estado

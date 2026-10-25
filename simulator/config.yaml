@@ -1,0 +1,60 @@
+# Configuración por defecto del simulador. Cualquier valor se puede pisar por
+# CLI (python simulator.py --help). Ver simulator/README.md.
+
+broker:
+  host: localhost
+  port: 1883
+  username: simulator
+  # La contraseña NO va aquí: se toma de --password, de la variable
+  # MQTT_SIMULATOR_PASSWORD o del .env de la raíz del repo.
+  keepalive: 30
+  qos: 1
+
+simulation:
+  devices: 10
+  interval_seconds: 5
+  duration_seconds: 0          # 0 = hasta Ctrl+C
+  id_prefix: esp32-sim-
+  id_offset: 0                 # para correr varias instancias sin colisión de IDs
+  # Patrón temporal: normal | random | burst | load
+  mode: normal
+  random_jitter: 0.3           # random: ± fracción del intervalo
+  burst_every_seconds: 30      # burst: cada cuánto hay una ráfaga
+  burst_size: 20               # burst: mensajes por dispositivo en la ráfaga
+  load_rate: 1000              # load: mensajes/s totales objetivo (ignora interval)
+
+connection:
+  # A: una conexión MQTT por dispositivo (estudia al broker con muchas conexiones)
+  # B: conexiones compartidas (estudia volumen; NO reproduce dispositivos
+  #    independientes: sin LWT por dispositivo, ver README)
+  mode: A
+  devices_per_connection: 100  # solo modo B
+  max_concurrent_connects: 50  # conexiones abriéndose a la vez
+  max_inflight: 100            # QoS 1 sin PUBACK por conexión
+
+temperature:
+  min: 18
+  max: 35
+  initial: 24
+  initial_spread: 3            # cada dispositivo arranca en initial ± spread
+  variation: 0.5               # desvío del paso aleatorio por muestra
+  reversion: 0.05              # tirón hacia su temperatura base (0 = random walk puro)
+
+humidity:
+  enabled: false               # el contrato la admite como null
+  initial: 50
+  variation: 1.0
+
+behavior:
+  random_disconnects: false
+  disconnect_probability: 0.01   # por dispositivo y por muestra
+  disconnect_seconds: [5, 20]    # duración de la desconexión
+  invalid_messages: false
+  invalid_percentage: 5          # % de mensajes inválidos
+  temperature_spikes: false
+  spike_probability: 0.005
+  spike_degrees: 15
+  spike_samples: 5
+
+stats:
+  interval_seconds: 5

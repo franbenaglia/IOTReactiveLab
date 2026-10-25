@@ -5,21 +5,21 @@ abrir cada sesión: mantenerla corta y al día.
 
 ## Estado actual
 
-- **Fase:** 0 — Harness y planificación → completada. Próxima: **Fase 1** (infraestructura + simulador).
-- **Última tarea:** creado el harness (CLAUDE.md, agentes, docs de seguimiento, hook de inicio). Hardware ESP32 definido a partir del proyecto de referencia.
-- **Próximo paso:** Fase 1, tarea 1.1 — `docker-compose.yml` con Mosquitto (con autenticación) y PostgreSQL, ver `development-plan.md`.
+- **Fase:** 1 — Infraestructura y simulador → **completada y validada** (2026-10-25). Próxima: **Fase 2** (backend MQTT + Reactor).
+- **Última tarea:** carga 10/100/1.000 (y 5.000) en modos A y B: pedidos = confirmados = recibidos, sin errores. Evidencia en `testing.md`.
+- **Próximo paso:** antes de codificar la fase 2, instalar JDK 21 (P1) y cerrar con `architect` los ADR de P4 (política de entrega), P5 (Paho v3/v5) y P7 (clave de deduplicación).
 - **En curso / a medias:** nada.
 
 ## Pendientes / bloqueos
 
 | # | Pendiente | Bloquea | Notas |
 |---|---|---|---|
-| P1 | Instalar JDK 21 (solo hay 8, 11 y 17) | Fase 2 | `sudo apt install openjdk-21-jdk` o SDKMAN. Ver ADR-004 |
-| P2 | Elegir librería MQTT del firmware con soporte de publicación QoS 1 | Fase 5 | PubSubClient solo publica QoS 0. Ver ADR-003 |
-| P3 | NTP en el firmware para `timestamp` UTC | Fase 5 | El proyecto de referencia no usaba NTP. Ver ADR-003 |
+| P1 | Instalar JDK 21 (solo hay 8, 11 y 17) | Fase 2 | `sudo apt install openjdk-21-jdk` (21.0.12 disponible en apt). Spring Boot 4.1 funciona con 17, pero main.md pide 21+. Ver ADR-004 |
 | P4 | Política de entrega MQTT → persistencia (ack, reintentos, recuperación) | Fase 2-3 | Decisión de arquitectura abierta (main.md §8 Pipeline A) |
 | P5 | Paho Java: cliente `mqttv3` o `mqttv5` | Fase 2 | Ambos 1.2.5 en Maven Central |
-| P6 | Mosquitto CLI no instalado en el host | — | Usar `docker compose exec mosquitto mosquitto_sub ...` |
+| P6 | Mosquitto CLI no instalado en el host | — | Usar `docker compose exec mosquitto mosquitto_sub ...` (ver README) |
+| P8 | El broker conserva status retained `offline` de los 5.000 `esp32-sim-*` de las pruebas de carga | Fase 2 | Decidir si el backend los registra; limpiar con `simulator/tools/clear_retained.py --prefix esp32-sim-` |
+| P9 | Perfil Docker Compose opcional para el simulador | — | main.md §14 lo deja opcional; hoy corre desde el host |
 | P7 | `sequence` se reinicia al reiniciar el dispositivo: definir clave de deduplicación | Fase 2-3 | Ver `mqtt-contract.md` → Garantías |
 
 ## Entorno
@@ -43,6 +43,14 @@ Spring Boot 4.1.2 (última estable), Paho Java 1.2.5, r2dbc-postgresql
 Revalidar compatibilidad al comenzar cada fase (ADR-004).
 
 ## Registro
+
+### 2026-10-25 — Fase 1: infraestructura y simulador
+- Decisiones del usuario: firmware con `256dpi/MQTT` (QoS 1) y NTP → ADR-003 resuelto. Sobre Java 21: Spring Boot 4.1 corre con 17, pero main.md pide 21+; se mantiene P1.
+- `docker-compose.yml`: Mosquitto 2.0.22 (auth + ACL, contraseñas generadas al arrancar desde `.env`, ADR-007) y PostgreSQL 17.11 (solo localhost). Healthchecks OK. `.env` local generado con contraseñas aleatorias.
+- Problema: Mosquitto avisaba que el ACL montado era legible por todos y el entrypoint de la imagen hacía `chown -R` sobre el montaje de solo lectura. Solución: montar en `/iotlab/mosquitto` y copiar a `/mosquitto/run` con `umask 077`.
+- Simulador (`simulator/`): paho-mqtt integrado al event loop de asyncio (ADR-008), MQTT 5, modos normal/random/burst/load, flags de desconexión/inválidos/picos/humedad, modos de conexión A y B, estadísticas pedidos vs confirmados (PUBACK) con latencia de ACK.
+- Herramientas: `tools/count_messages.py` (receptor: valida contrato, duplicados), `tools/clear_retained.py`, `scripts/load/run-scenario.sh`.
+- 39 pruebas pytest. Carga 10/100/1.000 A y B sin errores; 5.000/A satura el simulador (~3.700 msg/s), 5.000/B OK (~4.940 msg/s).
 
 ### 2026-10-25 — Fase 0: harness
 - Leída la especificación `main.md`. Repositorio vacío salvo ese archivo.

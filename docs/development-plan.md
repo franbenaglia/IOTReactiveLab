@@ -8,7 +8,7 @@ fase se cierra solo cuando todos sus criterios tienen evidencia en
 - ☑ CLAUDE.md, agentes, docs de seguimiento, hook de inicio.
 - ☑ Hardware ESP32 definido (ADR-002/003). Versiones consultadas (ADR-004).
 
-## Fase 1 — Infraestructura y simulador ☐
+## Fase 1 — Infraestructura y simulador ☑ (2026-10-25, evidencia en `testing.md`)
 
 | # | Tarea | Agente |
 |---|---|---|

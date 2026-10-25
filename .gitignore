@@ -29,3 +29,4 @@ dist/
 .idea/
 *.iml
 .DS_Store
+scripts/load/results/
