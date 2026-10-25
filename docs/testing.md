@@ -151,3 +151,38 @@ instante y el mismo atraso se procesa en **2,05 s, sin reintentos**.
 Reproducido dos veces. Causa probable: la resolución asíncrona de nombres de
 Netty, que usa r2dbc-postgresql, para `localhost`; el sistema operativo lo
 resuelve directo a 127.0.0.1. No se investigó más a fondo.
+
+## Fase 4 — WebSocket, alertas y dashboard (2026-10-25)
+
+```bash
+cd backend && mvn verify       # 66 unitarias + 19 de integración
+cd frontend && npm test        # 17 (Vitest + Testing Library)
+cd frontend && npm run build   # tsc + vite
+```
+
+| Prueba | Qué verifica | Resultado |
+|---|---|---|
+| `PipelineBTest` (4) | Tiempo virtual: `sample` para un dispositivo; ventana con la última por dispositivo; cliente lento → como máximo un lote viejo y después el más nuevo, descartes contados; estados filtrados por suscripción | ✅ |
+| `AlertDetectorTest` (6) | Antirrebote, sin repetición, histéresis, sin oscilar alrededor del umbral, dispositivos independientes | ✅ |
+| `WsCodecTest` (12) | Comandos válidos e inválidos (nunca excepciones) | ✅ |
+| `WebSocketIT` (5) | Cliente WS real + MQTT: ack, snapshot y telemetría filtrada; error sin cerrar la conexión; `subscribe` reemplaza; alerta RAISED→CLEARED con `/api/alerts`; `/api/metrics/monitor` con datos reales | ✅ |
+| Frontend `rates.test` (7) | Tasas desde contadores, "no disponible" si falta o retrocede, ventana acotada | ✅ |
+| Frontend `client.test` (3) | Query strings, ProblemDetail → `ApiError` | ✅ |
+| Frontend `TelemetrySocket.test` (5) | WebSocket simulado: suscripción al abrir, reconexión exponencial con resuscripción, tope del backoff, heartbeat, `close()` | ✅ |
+| Frontend `components.test` (2) | Columnas de la tabla, el valor de WS pisa al de REST; "no disponible" en el diagrama | ✅ |
+| Frontend `DevicePage.test` (1) | Recepción por WS: telemetría, una reentrega vieja ignorada, alerta, estado | ✅ |
+
+### Criterios de aceptación de la fase 4
+
+| Criterio | Evidencia | |
+|---|---|---|
+| Dashboard en tiempo real con dispositivos simulados | Navegador (Playwright) contra el backend y el simulador (50 disp, `--spikes --disconnects --invalid-pct 2`): las cuatro vistas con datos reales; vista individual actualizándose cada segundo; alerta disparada (37,8 °C) y resuelta (23,4 °C) recibida por WS | ✅ |
+| Filtros por dispositivo | Dispositivos: suscripción a los 50 de la página; `WebSocketIT` verifica que un dispositivo no suscripto no llega | ✅ |
+| Métricas reales | Monitor: tasas coherentes con el simulador (~44 recibidos/s, ~1 inválido/s con 2 %); pool R2DBC, heap, CPU, conexiones y memoria directa de Netty desde Micrometer; lo ausente muestra "no disponible" | ✅ |
+| Pruebas Vitest pasan | 17/17 | ✅ |
+
+### Observaciones
+- **Latencia p99 de ~65 ms con PostgreSQL** (en la fase 2, sin base, era 0,3 ms): cada mensaje espera su `INSERT` con commit propio. Es real y es materia de la fase 6 (lotes, `synchronous_commit`).
+- `GET /api/devices` con 5.350 dispositivos: ~95 ms y 1,4 MB, cada 10 s desde la vista de dispositivos. Aceptable aquí; con más dispositivos convendría paginar en el servidor.
+- En modo desarrollo, el primer acceso a cada vista tarda unos segundos porque Vite la compila bajo demanda. No ocurre con `npm run build`.
+- CPU del proceso: Micrometer la normaliza sobre todos los núcleos (8): ~2 % con 50 disp. El monitor muestra la cantidad de núcleos para no confundir.

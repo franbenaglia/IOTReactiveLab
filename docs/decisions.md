@@ -264,3 +264,43 @@ proyecto y no toca la configuración global del usuario. Se suma Maven Wrapper
 8. **Pool R2DBC:** `initial-size` = concurrencia (20), `max-size` 25 (margen para la API y el flush). Se precalienta (`R2dbcPoolWarmup`) antes de conectar MQTT, porque al arrancar llega de golpe lo acumulado en la sesión.
 9. **Host `127.0.0.1` por defecto, no `localhost`**, para R2DBC: ver el hallazgo en `progress.md` (fase 3).
 10. **P8 cerrado:** los `status` retained de dispositivos que nunca enviaron telemetría crean filas en `devices` (status sin `source`). Es lo esperado: un dispositivo que solo dijo "offline" existe. Para limpiar los restos de las pruebas: `simulator/tools/clear_retained.py --prefix <prefijo>` en el broker y `DELETE` en la base.
+
+---
+
+## ADR-014 — Dashboard: stack y estrategia de datos (fase 4)
+**Estado:** vigente · 2026-10-25
+
+**Stack.** React 19.3 + TypeScript 5.9 + Vite 8, Mantine 9 (componentes),
+Recharts 3, TanStack Query 5, react-router 7, Vitest 4 + Testing Library +
+jsdom 29. Versiones elegidas para funcionar con el **Node 20.20** instalado:
+react-router 8, Vitest 5 y jsdom 30 exigen Node 22. TypeScript 7 (el
+compilador reescrito en Go) se descartó por madurez.
+
+**Qué viaja por dónde.**
+| Vista | REST (TanStack Query, polling) | WebSocket |
+|---|---|---|
+| Vista general | overview (5 s), alertas (3 s), monitor (2 s) | — |
+| Dispositivos | listado (10 s) | suscripción filtrada a los ≤ 50 de la página visible, 1 s |
+| Individual | dispositivo, historial 24 h (una vez) | ese dispositivo, 1 s: telemetría, estado y alertas |
+| Reactive Monitor | `/api/metrics/monitor` (1 s) | — |
+
+El WebSocket se usa donde aporta: flujos continuos filtrados por dispositivo.
+La vista general no se suscribe a `"*"`: con 5.000 dispositivos serían ~1 MB
+por intervalo para mostrar seis números.
+
+**Tasas por segundo:** el backend expone contadores acumulados (lo que mide
+de verdad) y el cliente deriva la tasa con dos lecturas. Si un contador falta
+o retrocede (reinicio del backend), la tasa se muestra "no disponible", nunca
+como 0.
+
+---
+
+## ADR-015 — Backend y frontend en Docker Compose: fase 7
+**Estado:** vigente · 2026-10-25
+
+main.md §14 pide backend y frontend en compose. Se posterga a la fase 7
+(estabilidad), junto con el perfil opcional del simulador (P9). Mientras
+tanto: backend con `mvn spring-boot:run` o el jar, y frontend con `npm run
+dev` (el proxy de Vite resuelve `/api` y `/ws`). Lo que falta: Dockerfiles
+(JRE 17; build de Node + nginx con proxy de `/api` y `/ws`) y variables
+`POSTGRES_HOST=postgres` y `MQTT_SERVER_URI=tcp://mosquitto:1883`.

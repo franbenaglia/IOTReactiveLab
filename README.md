@@ -8,19 +8,22 @@ backend reactivo → PostgreSQL / WebSocket → dashboard React.
 - Estado del proyecto: [docs/progress.md](docs/progress.md)
 - Guía para Claude Code: [CLAUDE.md](CLAUDE.md)
 
-## Inicio rápido (fase 1)
+## Inicio rápido
 
 ```bash
 cp .env.example .env                 # completar contraseñas (openssl rand -base64 18)
 docker compose up -d mosquitto postgres
-docker compose ps                    # ambos (healthy)
+
+cd backend && mvn spring-boot:run    # :8080   (Java 17, ver backend/README.md)
+cd frontend && npm install && npm run dev   # :5173 (Node ≥ 20.19, ver frontend/README.md)
 
 cd simulator
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python simulator.py --devices 10
+.venv/bin/python simulator.py --devices 50 --interval 1 --spikes --disconnects
 ```
 
-Ver [simulator/README.md](simulator/README.md).
+Abrir http://localhost:5173. Detalle: [simulator/README.md](simulator/README.md),
+[backend/README.md](backend/README.md), [frontend/README.md](frontend/README.md).
 
 ## Red: localhost, servicios Docker e IP LAN
 

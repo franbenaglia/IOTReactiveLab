@@ -5,9 +5,9 @@ abrir cada sesión: mantenerla corta y al día.
 
 ## Estado actual
 
-- **Fase:** 3 — Persistencia reactiva → **completada y validada** (2026-10-25). Próxima: **Fase 4** (WebSocket + dashboard React).
-- **Última tarea:** R2DBC + Flyway, almacén con deduplicación, registro de dispositivos, API REST. Caída de PostgreSQL de 20 s con 100 disp: 8.997/8.997 filas, sin pérdidas. 58 pruebas pasan.
-- **Próximo paso:** fase 4. WebSocket `/ws/telemetry` sobre `RealtimeTelemetryBus` (contrato JSON de suscripción, `sample()`, filtros por dispositivo, clientes lentos), Pipeline C (alertas con antirrebote) y el frontend React (Vite + TS + Recharts). Antes, definir el contrato WebSocket en `architecture.md`.
+- **Fase:** 4 — WebSocket + dashboard → **completada y validada** (2026-10-25). Próxima: **Fase 5** (ESP32 físico).
+- **Última tarea:** `/ws/telemetry` (Pipeline B), alertas (Pipeline C), endpoint del monitor y dashboard React con 4 vistas, verificado en navegador con el simulador. 85 pruebas de backend + 17 de frontend.
+- **Próximo paso:** fase 5, `firmware/esp32-temperature/`, según `hardware-esp32.md` (256dpi/MQTT, NTP, LWT, `TemperatureSensor` + DHT11 + simulado). Necesita al usuario: placa conectada en `/dev/ttyUSB0`, credenciales WiFi en `secrets.ini` y la contraseña de `esp32-real-001` (está en `.env`).
 - **En curso / a medias:** nada.
 
 ## Pendientes / bloqueos
@@ -15,7 +15,9 @@ abrir cada sesión: mantenerla corta y al día.
 | # | Pendiente | Bloquea | Notas |
 |---|---|---|---|
 | P6 | Mosquitto CLI no instalado en el host | — | Usar `docker compose exec mosquitto mosquitto_sub ...` (ver README) |
-| P9 | Perfil Docker Compose opcional para el simulador | — | main.md §14 lo deja opcional; hoy corre desde el host |
+| P9 | Backend, frontend y perfil del simulador en Docker Compose | Fase 7 | ADR-015 |
+| P11 | Node 20 ya no tiene soporte (desde abril 2026) | — | El frontend usa versiones compatibles con Node 20 (ADR-014). Recomendado: Node 22/24 LTS y subir react-router 8, Vitest 5 y jsdom 30 |
+| P12 | `GET /api/devices` devuelve todo (5.350 → 1,4 MB) | — | Paginar en el servidor si crece la cantidad de dispositivos |
 
 ## Entorno
 
@@ -38,6 +40,13 @@ Spring Boot 4.1.2 (última estable), Paho Java 1.2.5, r2dbc-postgresql
 Revalidar compatibilidad al comenzar cada fase (ADR-004).
 
 ## Registro
+
+### 2026-10-25 — Fase 4: WebSocket, alertas y dashboard
+- Contrato `docs/websocket-contract.md` escrito antes del código.
+- Backend: `TelemetryWebSocketHandler` (`switchMap`, `sample`, `window` + `collectMap`, `onBackpressureLatest`, prefetch 1), `AlertService` con antirrebote e histéresis, `LatestTelemetryCache`, `/api/metrics/monitor`, métricas de Netty, frecuencia estimada por dispositivo.
+- Hallazgo: el **prefetch** de `merge` retenía lotes viejos de un cliente lento; con prefetch 1 queda a lo sumo uno (`reactor-concepts.md`).
+- Frontend (ADR-014): React 19 + Vite 8 + Mantine 9 + Recharts + TanStack Query, versiones compatibles con Node 20 (P11). Páginas con carga diferida (bundle inicial de 117 kB comprimido).
+- Verificación en navegador con Playwright: las cuatro vistas con datos reales del simulador, alertas en vivo, tabla con suscripción filtrada.
 
 ### 2026-10-25 — Fase 3: persistencia reactiva
 - Spring Data R2DBC (`DatabaseClient`) + r2dbc-postgresql 1.1.3 + pool; Flyway 12.4 por JDBC al arrancar. ADR-013.

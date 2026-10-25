@@ -30,3 +30,7 @@ dist/
 *.iml
 .DS_Store
 scripts/load/results/
+frontend/*.tsbuildinfo
+
+# Capturas del navegador (Playwright MCP)
+.playwright-mcp/

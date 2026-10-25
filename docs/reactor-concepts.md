@@ -54,6 +54,15 @@ Estado: ✅ documentado · ⏳ pendiente (fase en la que se usa).
 | `switchIfEmpty` | ✅ | `DeviceController` |
 | `Hooks.onErrorDropped` | ✅ | `ReactorHooksConfig` |
 | `block()` (dónde sí) | ✅ | `R2dbcPoolWarmup`, `DeviceRegistryFlusher#stop` |
+| `switchMap` | ✅ | `TelemetryWebSocketHandler#handle` |
+| `sample` | ✅ | `TelemetryWebSocketHandler#stream` (un dispositivo) |
+| `window` + `collectMap` | ✅ | `TelemetryWebSocketHandler#stream` (varios) |
+| `onBackpressureLatest` / `onBackpressureBuffer(DROP_OLDEST)` | ✅ | `TelemetryWebSocketHandler#stream` |
+| prefetch de `merge` / `switchMap` | ✅ | `TelemetryWebSocketHandler` |
+| `publish().autoConnect(n)` | ✅ | `TelemetryWebSocketHandler#handle` |
+| `takeUntilOther` | ✅ | `TelemetryWebSocketHandler#handle` |
+| `handle` | ✅ | `AlertService` |
+| `doOnDiscard` | ✅ | `TelemetryWebSocketHandler#stream` |
 | `concatMap` (vs `flatMap` en el pipeline) | ⏳ fase 6 | experimento 2 |
 | `buffer` / `bufferTimeout` | ⏳ fase 6 | variante por lotes (ADR-013) |
 | `sample` | ⏳ fase 4 | Pipeline B |
@@ -194,3 +203,61 @@ lo hacen, y aquí no se usan porque ningún paso bloquea.
 - **Regla del proyecto:** nunca en controladores ni en event loops (bloquear un event loop frena todas las conexiones que atiende).
 - **Excepciones documentadas:** `R2dbcPoolWarmup#start` y `DeviceRegistryFlusher#stop` corren en el hilo de arranque/apagado de Spring, que no es un event loop. Ahí bloquear es la única forma de garantizar un orden: el pool listo antes de MQTT, el último flush antes de cerrar el pool.
 - **En las pruebas** se usa `block()` para preparar datos, igual que `StepVerifier` bloquea para verificar.
+
+---
+
+## Fase 4 — WebSocket y alertas
+
+### Anatomía de una conexión WebSocket en WebFlux
+`handle(session)` devuelve un `Mono<Void>` que dura lo que dura la conexión.
+Entrada y salida son dos flujos independientes: `session.receive()` (los
+comandos del cliente) y `session.send(Flux)` (lo que se escribe). **Reactor
+Netty pide elementos al Flux de salida a medida que puede escribir en el
+socket**: un cliente lento genera menos demanda. Esa es la señal de
+backpressure que el pipeline usa para descartar solo para ese cliente.
+
+### `publish().autoConnect(3)` — dónde: `handle`
+- **Qué hace:** convierte el Flux frío `receive()` en uno compartido. Se conecta a la fuente recién cuando hay 3 suscriptores (respuestas, datos y la señal de fin).
+- **Por qué:** `receive()` solo admite **un** suscriptor. Con `share()` (que equivale a `autoConnect(1)`), el primer suscriptor dispararía la conexión y los otros dos podrían perderse el primer comando.
+
+### `switchMap` — dónde: `handle`
+- **Qué hace:** por cada `subscribe` arma un stream nuevo y **cancela el anterior**.
+- **Por qué:** es exactamente la semántica del contrato ("un subscribe nuevo reemplaza al anterior"). `flatMap` mantendría los dos streams vivos (datos duplicados); `concatMap` nunca pasaría al segundo, porque el primero no termina.
+- **Cancelación:** al cancelar el stream viejo se cancelan sus suscripciones al `RealtimeBus` y al de alertas; el sink deja de entregarle.
+
+### `sample(Duration)` — dónde: `stream`, suscripción a un dispositivo
+- **Qué hace:** cada intervalo emite **el último** elemento recibido en esa ventana y descarta los anteriores. Sin elementos nuevos, no emite.
+- **Por qué no alcanza para muchos dispositivos:** sobre un Flux mezclado de 5.000 dispositivos, `sample` se quedaría con una medición de un único dispositivo por intervalo.
+- **Hilos:** el reloj es `Schedulers.parallel()`; las emisiones salen de ese hilo.
+
+### `window(Duration)` + `collectMap` — dónde: `stream`, varios dispositivos
+- **Qué hace:** `window` corta el Flux en sub-Flux de tiempo fijo. `collectMap(deviceId)` reduce cada ventana a un mapa en el que **la última medición de cada dispositivo pisa a las anteriores**. Es la agregación del Pipeline B.
+- **Memoria:** acotada a una entrada por dispositivo suscripto. Con `buffer(Duration)` + deduplicar, se guardarían todas las mediciones de la ventana.
+- **`concatMap` sobre ventanas:** las ventanas son secuenciales; mantiene el orden y no las superpone.
+
+### `onBackpressureLatest` + `doOnDiscard` — dónde: `stream`
+- **Qué hace:** si abajo no hay demanda, conserva solo el lote más nuevo y descarta el que estaba esperando. `doOnDiscard`, ubicado **después**, cuenta los descartes (`iotlab_ws_dropped_total`): los operadores de arriba avisan de lo que descartan a través del contexto de la suscripción.
+- **Alternativas:** `onBackpressureBuffer(n)` (atraso creciente, y error al llenarse); `onBackpressureDrop` (descarta el nuevo y conserva el viejo: lo contrario de lo que sirve en tiempo real).
+- **Estados y alertas** usan `onBackpressureBuffer(256, …, DROP_OLDEST)`: son pocos y conviene no perderlos, pero tampoco pueden crecer sin límite.
+
+### Prefetch: el hallazgo de la fase 4
+`merge` y `switchMap` **piden por adelantado** a cada fuente (32 por
+defecto), aunque el suscriptor de abajo no haya pedido nada. En
+`PipelineBTest`, un cliente lento recibía el lote **más viejo**: había
+quedado guardado en la cola interna de `merge`, y `onBackpressureLatest`
+nunca vio falta de demanda. Con `Flux.merge(1, …)` y `switchMap(fn, 1)`, un
+cliente lento retiene a lo sumo un lote viejo y después recibe siempre el más
+nuevo. **Lección:** cada operador con cola interna es un buffer; el
+backpressure "real" depende de cuánto pide cada uno por adelantado.
+
+Límite que queda: Reactor Netty también tiene un buffer de escritura propio
+por conexión. Un cliente muy lento acumula ahí algunos mensajes antes de que
+el canal deje de ser escribible. Está acotado, pero no es cero. Medirlo es
+parte del experimento 5.
+
+### `takeUntilOther(commands.then())` — dónde: `handle`
+- Cuando el cliente cierra, `receive()` completa, `then()` emite, y la salida se corta. Sin esto, `switchMap` seguiría vivo, porque el stream interno es infinito.
+
+### `handle` — dónde: `AlertService`
+- **Qué hace:** map + filter en un paso: por cada medición, `sink.next(alerta)` o nada.
+- **Estado por dispositivo en un `HashMap` sin sincronizar:** es correcto porque Reactive Streams prohíbe llamar a `onNext` en paralelo (regla §1.3). El estado vive dentro de una única suscripción serializada. Si se agregara `parallel()`, dejaría de serlo.

@@ -48,7 +48,7 @@ Requisito previo: JDK 17 (ya instalado, ADR-004), ADR de Paho v3/v5 (P5), ADR de
 
 **Criterios:** mediciones persistidas y consultables; duplicados rechazados por la base y contados; caída breve de PostgreSQL no mata el pipeline; pruebas Testcontainers pasan.
 
-## Fase 4 — WebSocket + React ☐
+## Fase 4 — WebSocket + React ☑ (2026-10-25, evidencia en `testing.md`)
 - `/ws/telemetry` con contrato JSON de suscripción (todos / por `deviceId`), `sample()` configurable, clientes lentos.
 - Pipeline C de alertas con antirrebote.
 - Frontend: vistas general, dispositivos, individual, Reactive Monitor, pipeline.

@@ -18,6 +18,7 @@ Antes de modificar código, en este orden:
 2. Leer [docs/decisions.md](docs/decisions.md): decisiones vigentes (ADR). No contradecirlas sin registrar una nueva.
 3. Leer el documento específico de la tarea:
    - contrato MQTT → [docs/mqtt-contract.md](docs/mqtt-contract.md)
+   - contrato WebSocket → [docs/websocket-contract.md](docs/websocket-contract.md)
    - arquitectura → [docs/architecture.md](docs/architecture.md)
    - plan y criterios de aceptación → [docs/development-plan.md](docs/development-plan.md)
    - ESP32 / hardware → [docs/hardware-esp32.md](docs/hardware-esp32.md)
@@ -49,7 +50,7 @@ Si una sesión se corta a mitad de etapa, dejar al menos *Estado actual* de
 - **Sin `block()`** en controladores ni en event loops. Sin `subscribe()` sueltos en servicios: las suscripciones de larga duración tienen un único punto de arranque documentado y se liberan al detener la app.
 - **Métricas reales.** Nunca fabricar valores para el dashboard. Sin `deviceId` como tag de Micrometer (alta cardinalidad).
 - **Secretos fuera del repo.** `secrets.ini` (firmware), `.env` (compose), `passwd` de Mosquitto: en `.gitignore`, con su `*.example` versionado.
-- **Contrato MQTT único** para físico y simulado. Cualquier cambio se hace primero en `docs/mqtt-contract.md` y luego en todos los productores/consumidores.
+- **Contratos primero.** MQTT (`docs/mqtt-contract.md`, único para físico y simulado) y WebSocket (`docs/websocket-contract.md`): cualquier cambio se hace primero en el documento y luego en productores y consumidores (los tipos de `frontend/src/api/types.ts` incluidos).
 - **Educativo:** cada operador Reactor relevante se documenta en `docs/reactor-concepts.md` (qué hace, por qué, alternativa, cuándo se ejecuta, hilos, errores, sobrecarga). En el código, comentarios breves; la explicación larga va al doc.
 - No guardar archivos temporales de razonamiento en el repo.
 - Idioma: documentación y comentarios en español; identificadores de código en inglés.

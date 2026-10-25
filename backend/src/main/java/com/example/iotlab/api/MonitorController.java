@@ -70,6 +70,7 @@ public class MonitorController {
         sumGauge(g, "jvmHeapMax", "jvm.memory.max", "area", "heap");
         sumGauge(g, "jvmNonHeapUsed", "jvm.memory.used", "area", "nonheap");
         gauge(g, "processCpu", "process.cpu.usage");
+        gauge(g, "cpuCount", "system.cpu.count");
         gauge(g, "jvmThreads", "jvm.threads.live");
         sumGauge(g, "nettyConnectionsActive", "reactor.netty.http.server.connections.active");
         sumGauge(g, "nettyDirectMemoryUsed", "reactor.netty.bytebuf.allocator.used.direct.memory");

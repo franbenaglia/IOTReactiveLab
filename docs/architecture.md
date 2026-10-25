@@ -1,6 +1,6 @@
 # Arquitectura
 
-Estado: fase 3 completada (infraestructura, simulador, backend con persistencia R2DBC y API REST). Se actualiza al cerrar cada fase. Decisiones de
+Estado: fase 4 completada (infraestructura, simulador, backend con persistencia, WebSocket, alertas y dashboard React). Se actualiza al cerrar cada fase. Decisiones de
 fondo en `decisions.md`.
 
 ## Vista de componentes
@@ -154,3 +154,29 @@ las consultas.
 `R2dbcPoolWarmup` (-200) → `DeviceRegistryFlusher` (-100) → `PipelineRunner`
 (0) → `MqttSubscriber` (100). La parada es en orden inverso: MQTT primero,
 el flush final de `last_seen` al último.
+
+## Tiempo real y dashboard (fase 4, ADR-014)
+
+```text
+Pipeline A ─doOnNext─► RealtimeBus (multicast best-effort: telemetría + estados)
+                          ├─► LatestTelemetryCache      (snapshot, promedio)
+                          ├─► AlertService (Pipeline C) ─► alertas (multicast) ─┐
+                          └─► por cada cliente WS: filter → sample | window+collectMap
+                                 → onBackpressureLatest ─► merge(estados, alertas) ─► session.send
+```
+
+| Clase | Paquete | Responsabilidad |
+|---|---|---|
+| `TelemetryWebSocketHandler` | `websocket` | `/ws/telemetry` (docs/websocket-contract.md) |
+| `WsCodec`, `ClientCommand`, `WsMessages` | `websocket` | Contrato JSON |
+| `RealtimeBus` | `reactive` | Telemetría y estados para B y C |
+| `LatestTelemetryCache` | `reactive` | Última medición por dispositivo |
+| `AlertDetector`, `AlertService`, `AlertController` | `alerts` | Pipeline C, `GET /api/alerts` |
+| `MonitorController` | `api` | `GET /api/metrics/monitor` |
+| `NettyMetricsConfig` | `config` | Métricas de Reactor Netty con URIs agrupadas |
+
+**Frontend** (`frontend/`): `src/api` (tipos de los contratos, cliente REST,
+`useMonitor`), `src/ws` (`TelemetrySocket`: reconexión, heartbeat,
+resuscripción), `src/pages` (Vista general, Dispositivos, Individual, Reactive
+Monitor), `src/components` (diagrama del pipeline, gráficos con ventana
+acotada). En desarrollo, Vite reenvía `/api` y `/ws` al backend.
