@@ -42,6 +42,11 @@ public class PipelineMetrics {
     private final Counter connectionsEstablished;
     private final Counter connectionsLost;
     private final Counter sinkDropped;
+    private final Counter alertsRaised;
+    private final Counter alertsCleared;
+    private final Counter wsMessages;
+    private final Counter wsDropped;
+    private final AtomicInteger wsClients = new AtomicInteger();
     private final Timer latency;
     private final AtomicInteger storeInFlight = new AtomicInteger();
     private final AtomicInteger connected = new AtomicInteger();
@@ -68,6 +73,13 @@ public class PipelineMetrics {
         connectionsEstablished = counter("mqtt.connections", "Eventos de conexión MQTT", "event", "connected");
         connectionsLost = counter("mqtt.connections", "Eventos de conexión MQTT", "event", "lost");
         sinkDropped = counter("mqtt.dropped", "Mensajes que no entraron al Sink (no debería ocurrir)", "reason", "sink_rejected");
+        alertsRaised = counter("alerts", "Eventos de alerta", "state", "raised");
+        alertsCleared = counter("alerts", "Eventos de alerta", "state", "cleared");
+        wsMessages = counter("ws.messages", "Mensajes enviados por WebSocket");
+        wsDropped = counter("ws.dropped", "Actualizaciones descartadas por clientes WebSocket lentos");
+        Gauge.builder(PREFIX + "ws.clients", wsClients, AtomicInteger::get)
+                .description("Clientes WebSocket conectados")
+                .register(registry);
         latency = Timer.builder(PREFIX + "pipeline.latency")
                 .description("Recepción MQTT → estado final (persistido, duplicado o inválido)")
                 .publishPercentiles(0.5, 0.95, 0.99)
@@ -106,6 +118,12 @@ public class PipelineMetrics {
     public void sinkDropped() { sinkDropped.increment(); }
     public void latency(long receivedNanos) { latency.record(Duration.ofNanos(System.nanoTime() - receivedNanos)); }
     public void storeStarted() { storeInFlight.incrementAndGet(); }
+    public void alertRaised() { alertsRaised.increment(); }
+    public void alertCleared() { alertsCleared.increment(); }
+    public void wsMessage() { wsMessages.increment(); }
+    public void wsDropped() { wsDropped.increment(); }
+    public void wsConnected() { wsClients.incrementAndGet(); }
+    public void wsDisconnected() { wsClients.decrementAndGet(); }
     public void storeFinished() { storeInFlight.decrementAndGet(); }
 
     public void connected() {
@@ -121,7 +139,8 @@ public class PipelineMetrics {
 
     public boolean isConnected() { return connected.get() == 1; }
 
-    public MetricsOverview overview(long devicesTotal, long devicesOnline, long devicesOffline, long telemetryRows) {
+    public MetricsOverview overview(long devicesTotal, long devicesOnline, long devicesOffline, long telemetryRows,
+                                    Double averageTemperature, int activeAlerts) {
         double invalidTotal = invalid.values().stream().mapToDouble(Counter::count).sum();
         var snapshot = latency.takeSnapshot();
         double p95 = 0, p99 = 0;
@@ -135,6 +154,6 @@ public class PipelineMetrics {
                 valid.count(), invalidTotal, inserted.count(), duplicates.count(), storeFailed.count(),
                 storeRetries.count(), sequenceResets.count(), acksSent.count(),
                 pending == null ? 0 : pending.value(), storeInFlight.get(), p95, p99,
-                devicesTotal, devicesOnline, devicesOffline, telemetryRows);
+                devicesTotal, devicesOnline, devicesOffline, telemetryRows, averageTemperature, activeAlerts);
     }
 }

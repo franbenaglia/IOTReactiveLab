@@ -4,7 +4,7 @@ import com.example.iotlab.config.PipelineProperties;
 import com.example.iotlab.metrics.PipelineMetrics;
 import com.example.iotlab.mqtt.Acknowledger;
 import com.example.iotlab.mqtt.InboundMessage;
-import com.example.iotlab.reactive.RealtimeTelemetryBus;
+import com.example.iotlab.reactive.RealtimeBus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -27,13 +27,13 @@ public class TelemetryProcessor {
     private final TelemetryParser parser;
     private final TelemetryStore store;
     private final SequenceTracker sequences;
-    private final RealtimeTelemetryBus realtime;
+    private final RealtimeBus realtime;
     private final Acknowledger acknowledger;
     private final PipelineMetrics metrics;
     private final PipelineProperties props;
 
     public TelemetryProcessor(TelemetryParser parser, TelemetryStore store, SequenceTracker sequences,
-                              RealtimeTelemetryBus realtime, Acknowledger acknowledger,
+                              RealtimeBus realtime, Acknowledger acknowledger,
                               PipelineMetrics metrics, PipelineProperties props) {
         this.parser = parser;
         this.store = store;
@@ -77,6 +77,7 @@ public class TelemetryProcessor {
             case STATUS:
                 metrics.receivedStatus();
                 metrics.status(r.status().state() == com.example.iotlab.domain.DeviceStatus.State.ONLINE);
+                realtime.publish(r.status());
                 break;
             case INVALID:
                 if (r.reason() == InvalidReason.UNKNOWN_TOPIC) {

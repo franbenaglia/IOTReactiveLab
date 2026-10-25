@@ -10,7 +10,7 @@ import com.example.iotlab.domain.Telemetry;
 import com.example.iotlab.metrics.PipelineMetrics;
 import com.example.iotlab.mqtt.AckTracker;
 import com.example.iotlab.mqtt.InboundMessage;
-import com.example.iotlab.reactive.RealtimeTelemetryBus;
+import com.example.iotlab.reactive.RealtimeBus;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
@@ -42,7 +42,7 @@ class TelemetryProcessorTest {
     TelemetryProcessor processor(TelemetryStore store, int concurrency) {
         TelemetryParser parser = new TelemetryParser(JsonMapper.builder().build(), props(concurrency),
                 Clock.fixed(Instant.parse("2026-10-25T12:31:00Z"), ZoneOffset.UTC));
-        return new TelemetryProcessor(parser, store, new SequenceTracker(), new RealtimeTelemetryBus(),
+        return new TelemetryProcessor(parser, store, new SequenceTracker(), new RealtimeBus(),
                 acked::add, metrics, props(concurrency));
     }
 
@@ -193,7 +193,7 @@ class TelemetryProcessorTest {
         TelemetryParser parser = new TelemetryParser(JsonMapper.builder().build(), props(10),
                 Clock.fixed(Instant.parse("2026-10-25T12:31:00Z"), ZoneOffset.UTC));
         TelemetryProcessor p = new TelemetryProcessor(parser, jittery, new SequenceTracker(),
-                new RealtimeTelemetryBus(), tracker::complete, metrics, props(10));
+                new RealtimeBus(), tracker::complete, metrics, props(10));
 
         List<Long> completionOrder = Collections.synchronizedList(new ArrayList<>());
         Flux<InboundMessage> input = Flux.range(1, 200).map(i -> {
@@ -225,13 +225,13 @@ class TelemetryProcessorTest {
 
     @Test
     void validTelemetryIsPublishedToRealtimeBus() {
-        RealtimeTelemetryBus bus = new RealtimeTelemetryBus();
+        RealtimeBus bus = new RealtimeBus();
         TelemetryParser parser = new TelemetryParser(JsonMapper.builder().build(), props(1),
                 Clock.fixed(Instant.parse("2026-10-25T12:31:00Z"), ZoneOffset.UTC));
         TelemetryProcessor p = new TelemetryProcessor(parser, new NoOpTelemetryStore(), new SequenceTracker(),
                 bus, acked::add, metrics, props(1));
         List<Telemetry> seen = new ArrayList<>();
-        bus.flux().subscribe(seen::add);
+        bus.telemetry().subscribe(seen::add);
         StepVerifier.create(p.process(Flux.just(telemetry("dev-001", 20, 1), inbound("iot/devices/dev-001/telemetry", "x"))))
                 .expectNextCount(2)
                 .verifyComplete();

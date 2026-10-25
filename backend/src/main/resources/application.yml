@@ -48,6 +48,10 @@ iotlab:
     store-timeout: 5s
   devices:
     last-seen-flush: 5s
+  alerts:
+    threshold: 35
+    hysteresis: 1
+    raise-after: 2
 
 management:
   endpoints:

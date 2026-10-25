@@ -22,4 +22,7 @@ public record MetricsOverview(
         long devicesTotal,
         long devicesOnline,
         long devicesOffline,
-        long telemetryRows) {}
+        long telemetryRows,
+        /** Promedio de la última temperatura de cada dispositivo visto (caché en memoria); null si no hay. */
+        Double averageTemperature,
+        int activeAlerts) {}

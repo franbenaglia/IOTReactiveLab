@@ -16,12 +16,19 @@ public class DeviceRepository {
 
     private static final String SELECT_VIEW = """
             SELECT d.device_id, d.source, d.status, d.status_changed_at, d.last_seen, d.created_at,
-                   t.temperature AS last_temperature, t.humidity AS last_humidity, t.measured_at AS last_measured_at
+                   t.temperature AS last_temperature, t.humidity AS last_humidity, t.measured_at AS last_measured_at,
+                   r.per_minute
             FROM devices d
             LEFT JOIN LATERAL (
                 SELECT temperature, humidity, measured_at FROM telemetry
                 WHERE device_id = d.device_id ORDER BY measured_at DESC LIMIT 1
             ) t ON true
+            -- Frecuencia estimada de publicación: mediciones del último minuto. Recorre un tramo
+            -- del índice único (device_id, measured_at, ...), sin leer la tabla.
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS per_minute FROM telemetry
+                WHERE device_id = d.device_id AND measured_at > now() - interval '60 seconds'
+            ) r ON true
             """;
 
     private final DatabaseClient db;
@@ -106,6 +113,7 @@ public class DeviceRepository {
                 r.get("created_at", Instant.class),
                 r.get("last_temperature", Double.class),
                 r.get("last_humidity", Double.class),
-                r.get("last_measured_at", Instant.class));
+                r.get("last_measured_at", Instant.class),
+                r.get("per_minute", Long.class));
     }
 }
