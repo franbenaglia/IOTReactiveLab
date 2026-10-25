@@ -5,9 +5,9 @@ abrir cada sesión: mantenerla corta y al día.
 
 ## Estado actual
 
-- **Fase:** 1 — Infraestructura y simulador → **completada y validada** (2026-10-25). Próxima: **Fase 2** (backend MQTT + Reactor).
-- **Última tarea:** carga 10/100/1.000 (y 5.000) en modos A y B: pedidos = confirmados = recibidos, sin errores. Evidencia en `testing.md`.
-- **Próximo paso:** fase 2. Primero el esqueleto Spring Boot 4.1 / Java 17 con `.mvn/settings.xml` (ADR-012) y la prueba de integración que valida Paho v5 (`ReceiveMaximum` y reentrega, ADR-009). Después el adaptador MQTT → Reactor con confirmación manual (ADR-010).
+- **Fase:** 2 — Backend MQTT + Reactor → **completada y validada** (2026-10-25). Próxima: **Fase 3** (persistencia reactiva).
+- **Última tarea:** backend con Paho v5 + Pipeline A (validación, `flatMap`, PUBACK en orden) contra 100 dispositivos simulados; sesión persistente verificada con el backend caído. 40 pruebas pasan.
+- **Próximo paso:** fase 3. Agregar R2DBC + Flyway, crear las tablas `devices`/`telemetry` con la clave única de ADR-011 y reemplazar `NoOpTelemetryStore` por el almacén R2DBC (`INSERT … ON CONFLICT DO NOTHING`, `isTransient` según las excepciones de R2DBC). Pool R2DBC ≥ `iotlab.pipeline.concurrency`.
 - **En curso / a medias:** nada.
 
 ## Pendientes / bloqueos
@@ -15,7 +15,7 @@ abrir cada sesión: mantenerla corta y al día.
 | # | Pendiente | Bloquea | Notas |
 |---|---|---|---|
 | P6 | Mosquitto CLI no instalado en el host | — | Usar `docker compose exec mosquitto mosquitto_sub ...` (ver README) |
-| P8 | El broker conserva status retained `offline` de los 5.000 `esp32-sim-*` de las pruebas de carga | Fase 2 | Decidir si el backend los registra; limpiar con `simulator/tools/clear_retained.py --prefix esp32-sim-` |
+| P8 | El broker conserva status retained `offline` de los 5.000 `esp32-sim-*` de las pruebas de carga | Fase 3 | Con `retainHandling=1` ya no se reenvían en cada reconexión. Decidir en la fase 3 si se registran en `devices` o se limpian con `simulator/tools/clear_retained.py --prefix esp32-sim-` |
 | P9 | Perfil Docker Compose opcional para el simulador | — | main.md §14 lo deja opcional; hoy corre desde el host |
 
 ## Entorno
@@ -39,6 +39,17 @@ Spring Boot 4.1.2 (última estable), Paho Java 1.2.5, r2dbc-postgresql
 Revalidar compatibilidad al comenzar cada fase (ADR-004).
 
 ## Registro
+
+### 2026-10-25 — Fase 2: backend MQTT + Reactor
+- Spring Boot 4.1.2 (Spring Framework 7, Reactor 2025.0, Jackson 3.1, JUnit 6, Testcontainers 2.0.5), Java 17. `backend/.mvn/settings.xml` → Maven Central (ADR-012); todas las dependencias se resolvieron sin la intranet.
+- **ADR-009 validado** con `PahoV5BehaviorIT`. Hallazgos: DUP=false en reentregas; hace falta `retainHandling=1`; "listo" recién con el SUBACK.
+- Problemas encontrados y resueltos:
+  - Testcontainers: Mosquitto no vacía stdout sin TTY, así que esperar por log no funciona; se espera por el puerto.
+  - Gauge de escrituras en curso en `concurrency + 1` con `doFinally`; se pasó a `doOnTerminate` + `doOnCancel` (documentado en `reactor-concepts.md`).
+  - `Queues.get(n)` tiene un mínimo de 8.
+  - Datos de prueba con hora fija rechazados como `FUTURE_TIMESTAMP` contra el reloj real: el validador funcionaba bien, el dato de prueba estaba mal.
+  - Conflicto de nombre `MqttProperties` (propia y de Paho).
+- Validación real: 100 dispositivos × 60 s con 5 % de inválidos; todo cuadra (ver `testing.md`). Sesión persistente: 1.998 mensajes publicados con el backend caído, recibidos al volver.
 
 ### 2026-10-25 — Decisiones previas a la fase 2
 - Usuario: backend con **Java 17** (ADR-004).

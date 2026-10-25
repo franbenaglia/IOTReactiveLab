@@ -81,3 +81,36 @@ Observaciones:
 - Modo A con 1.000 conexiones publica algo menos que 60.000 porque cada dispositivo espera su conexión antes de arrancar y el arranque se reparte en el primer intervalo (conexiones de 50 en 50).
 - La latencia del ACK sube en modo B: los mensajes de 100 dispositivos se serializan por un mismo socket y compiten por las mismas 100 ranuras de `max_inflight`. Es una diferencia real entre los modos, no un defecto.
 - La primera corrida de 10/A contó 18 mensajes ajenos (una prueba de LWT en paralelo, otro prefijo). Se agregó `--prefix` al contador y se repitió; la fila es la repetición.
+
+## Fase 2 — backend MQTT + Reactor (2026-10-25)
+
+```bash
+cd backend && mvn verify      # unitarias (surefire) + *IT con Testcontainers (failsafe)
+```
+
+| Prueba | Qué verifica | Resultado |
+|---|---|---|
+| `PahoV5BehaviorIT` | ADR-009: `ReceiveMaximum` limita lo no confirmado; reentrega en orden al reconectar; DUP=false | ✅ |
+| `BackendMqttIT` | App completa contra Mosquitto: 300 válidos + 2 inválidos + 1 status → 303 PUBACK, 0 pendientes | ✅ |
+| `AckTrackerTest` (5) | PUBACK en orden con terminación desordenada, QoS 0, reset tras reconexión, fallo de envío, 10.000 confirmaciones desde 8 hilos | ✅ |
+| `TelemetryParserTest` (20) | Contrato: válidos, 15 casos inválidos (incluye los 5 tipos del simulador), status y LWT, misma clave en reentregas | ✅ |
+| `MqttReactorAdapterTest` (5) | Sink: buffer antes de suscribir, cola acotada, demanda, un solo suscriptor, rechazo tras completar | ✅ |
+| `TelemetryProcessorTest` (8) | StepVerifier: un inválido no corta el flujo; reintento con backoff en tiempo virtual y confirmación recién al guardar; error no transitorio → FAILED; duplicados; `flatMap` ≤ concurrencia; PUBACK en orden; reinicio de secuencia; tiempo real | ✅ |
+
+Total: 40 pruebas (38 unitarias + 2 de integración), todas pasan.
+
+### Criterios de aceptación de la fase 2
+
+| Criterio | Evidencia | |
+|---|---|---|
+| Consume 100 dispositivos simulados sin errores | Simulador 100 disp × 60 s, 5 % inválidos, contra el backend (jar) y el Mosquitto de compose con autenticación. Simulador: 5.998 pedidos = 5.998 confirmados. Backend: 5.998 telemetría recibida = 5.694 válidos + 304 inválidos (= los 304 del simulador: 64 id_mismatch, 75 malformed_json, 46 missing_field, 55 out_of_range, 64 wrong_type); 200 status; 6.198 PUBACK; 0 pendientes; 0 descartados; p95 0,28 ms, p99 0,34 ms (almacén provisorio, sin base) | ✅ |
+| Métricas en `/actuator/metrics` | `/actuator/metrics/iotlab.*` y `/actuator/prometheus` | ✅ |
+| Inválidos contados y el flujo sigue vivo | Ídem (inválidos intercalados durante 60 s) + `TelemetryProcessorTest#invalidMessageDoesNotTerminateTheFlux` | ✅ |
+| Pruebas pasan | `mvn verify`: 40/40 | ✅ |
+
+### Sesión persistente (ADR-010), prueba manual
+
+1. Backend detenido con SIGTERM: apagado ordenado (MQTT primero, luego "Pipeline A completado").
+2. Con el backend caído, el simulador publicó 1.998 telemetrías + 200 status (otros IDs, `--id-offset 100`).
+3. Al levantar el backend: **1.998 telemetrías recibidas** (lo que el broker guardó para la sesión), 0 PUBACK pendientes.
+4. Dos reinicios más con `retainHandling=1`: 0 status retained reenviados (antes: 5.000).

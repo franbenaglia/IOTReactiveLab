@@ -1,0 +1,41 @@
+spring:
+  application:
+    name: iotlab-backend
+  config:
+    # Contraseñas desde el .env de la raíz del repo (formato KEY=VALUE, compatible con
+    # .properties). Opcional: en Docker llegan como variables de entorno.
+    import: optional:file:../.env[.properties]
+
+server:
+  port: ${BACKEND_PORT:8080}
+
+iotlab:
+  mqtt:
+    server-uri: ${MQTT_SERVER_URI:tcp://localhost:1883}
+    client-id: iotlab-backend
+    username: backend
+    password: ${MQTT_BACKEND_PASSWORD:}
+    receive-maximum: 100
+    session-expiry-seconds: 3600
+  pipeline:
+    concurrency: 20
+    temperature-min: -40
+    temperature-max: 125
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: iotlab-backend
+
+logging:
+  level:
+    com.example.iotlab: INFO
+    # Paho loguea por java.util.logging; se silencia lo rutinario.
+    org.eclipse.paho: WARN

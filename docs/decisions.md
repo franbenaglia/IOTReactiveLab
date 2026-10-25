@@ -165,10 +165,16 @@ backend controla cuánto trabajo acepta. Mosquitto traduce entre versiones,
 así que el ESP32 (3.1.1) y el simulador (5) no se ven afectados.
 
 **Riesgo y verificación.** `mqttv5.client` tiene menos uso que v3. Al inicio
-de la fase 2, una prueba de integración debe demostrar: (a) el broker nunca
+de la fase 2, una prueba de integración debía demostrar: (a) el broker nunca
 entrega más de `ReceiveMaximum` mensajes sin confirmar; (b) un mensaje no
-confirmado se reentrega al reconectar. Si alguna falla, se vuelve a v3 con
-este ADR reemplazado.
+confirmado se reentrega al reconectar. Si alguna fallaba, se volvía a v3.
+
+**Validado el 2026-10-25** (`PahoV5BehaviorIT`, Mosquitto 2.0.22): (a) con
+`ReceiveMaximum=5` llegan exactamente 5, y confirmar uno libera exactamente
+una ranura; (b) al reconectar se reentregan m2..m6, en orden. Hallazgos:
+- **El flag DUP llega en `false` en las reentregas.** No sirve para detectar duplicados; la deduplicación es de la base (ADR-011). La prueba lo verifica, así que avisará si cambia.
+- **Retained y reconexión:** el backend se suscribe con `retainHandling=1` (opción de MQTT 5), así los `status` retained se reciben solo cuando la suscripción es nueva. Sin esto, cada reconexión traía de nuevo el último estado de todos los dispositivos (5.000 tras las pruebas de carga).
+- **"Listo" = SUBACK recibido**, no CONNACK. Lo publicado entre ambos no llega a una sesión que todavía no tiene suscripción (se vio en `BackendMqttIT`).
 
 ---
 

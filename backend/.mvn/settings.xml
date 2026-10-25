@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Settings de Maven exclusivo de este proyecto (ADR-012). Lo activa
+  .mvn/maven.config y reemplaza al ~/.m2/settings.xml del usuario, que redirige
+  todos los repositorios a una intranet. Sin mirrors: se usa Maven Central.
+  El repositorio local sigue siendo ~/.m2/repository.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+</settings>

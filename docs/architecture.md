@@ -1,6 +1,6 @@
 # Arquitectura
 
-Estado: fase 1 completada (infraestructura + simulador). Se actualiza al cerrar cada fase. Decisiones de
+Estado: fase 2 completada (infraestructura, simulador, backend MQTT + Reactor sin persistencia). Se actualiza al cerrar cada fase. Decisiones de
 fondo en `decisions.md`.
 
 ## Vista de componentes
@@ -100,3 +100,33 @@ simulador, ver `testing.md`).
 `entrypoint.sh` genera `passwd` desde `.env` y copia `acl` y
 `mosquitto.conf` a `/mosquitto/run` con permisos 0700. Límites explícitos:
 `max_inflight_messages 100`, `max_queued_messages 10000`.
+
+## Backend (fase 2)
+
+| Clase | Paquete | Responsabilidad |
+|---|---|---|
+| `MqttSubscriber` | `mqtt` | Paho v5: conexión, sesión persistente, `ReceiveMaximum`, SUBSCRIBE con `retainHandling=1`, reconexión; implementa `Acknowledger` |
+| `AckTracker` | `mqtt` | PUBACK en orden de llegada; se reinicia al perder la conexión |
+| `MqttHealthIndicator` | `mqtt` | `/actuator/health` → `mqtt` UP solo con SUBACK |
+| `MqttReactorAdapter` | `reactive` | `Sinks.many().unicast()` con cola acotada → `Flux<InboundMessage>` |
+| `RealtimeTelemetryBus` | `reactive` | `Sinks.many().multicast().directBestEffort()` para B/C |
+| `TelemetryParser` | `processing` | Contrato: deserializar, validar, normalizar (nunca lanza) |
+| `TelemetryProcessor` | `processing` | Pipeline A (assembly) |
+| `PipelineRunner` | `processing` | Único `subscribe()` del pipeline; ciclo de vida |
+| `TelemetryStore` / `NoOpTelemetryStore` | `processing` | Puerto de persistencia; la fase 3 trae la implementación R2DBC |
+| `SequenceTracker` | `processing` | Detecta reinicios de dispositivo (`sequence` que retrocede) |
+| `PipelineMetrics` | `metrics` | Micrometer, etiquetas acotadas |
+
+**Ciclo de vida** (`SmartLifecycle`): `PipelineRunner` (fase 0) arranca antes
+y se detiene después que `MqttSubscriber` (fase 100). Al arrancar, el
+pipeline ya escucha cuando llega el primer mensaje. Al detener, MQTT se
+desconecta primero, se vacía lo que está en curso (plazo `shutdown-timeout`) y
+lo no confirmado lo reentrega el broker en el próximo arranque.
+
+**Métricas** (`/actuator/prometheus`, prefijo `iotlab_`): `mqtt_received{type}`,
+`mqtt_acks{result}`, `mqtt_acks_pending`, `mqtt_sink_queued`, `mqtt_connected`,
+`mqtt_connections{event}`, `mqtt_dropped{reason}`, `telemetry_valid`,
+`telemetry_invalid{reason}`, `telemetry_stored{result}`,
+`telemetry_store_retries`, `telemetry_store_inflight`,
+`telemetry_sequence_resets`, `status_received{state}` y `pipeline_latency`
+(p50/p95/p99).

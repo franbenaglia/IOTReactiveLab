@@ -29,7 +29,7 @@ fase se cierra solo cuando todos sus criterios tienen evidencia en
 5. Status `online` retained al conectar; LWT `offline` al matar el proceso abruptamente.
 6. `pytest` pasa.
 
-## Fase 2 — Backend MQTT + Reactor ☐
+## Fase 2 — Backend MQTT + Reactor ☑ (2026-10-25, evidencia en `testing.md`)
 Requisito previo: JDK 17 (ya instalado, ADR-004), ADR de Paho v3/v5 (P5), ADR de política de entrega (P4).
 
 - Proyecto Spring Boot 4.1.x (WebFlux, Actuator, Micrometer), paquetes según ADR-001.
